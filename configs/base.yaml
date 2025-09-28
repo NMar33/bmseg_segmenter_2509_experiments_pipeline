@@ -1,0 +1,90 @@
+# configs/base.yaml
+
+# DEV: Это наш главный шаблон. Все экспериментальные конфиги будут
+# переопределять значения из этого файла. Здесь должны быть ВСЕ ключи.
+
+seed: 42
+
+# --- DATA ---
+data:
+  # Пути к данным. Будут переопределяться в каждом эксперименте.
+  prepared_data_root: "../prepared_data/isbi2012_v1_raw" # Пример
+  interim_data_root: "./interim_data/isbi2012_v1_raw"     # Пример
+  
+  # Параметры тайлинга
+  tile_size: 512
+  overlap: 64
+
+  # Параметры Feature Bank
+  feature_bank:
+    use: false # По умолчанию выключено
+    base_norm: zscore # Нормализация базового изображения перед фильтрами
+    channels:
+      - raw
+      - clahe
+      - scharr
+      - laplacian
+      - log_sigma1
+      - log_sigma2
+  
+  # Параметры сохранения промежуточных данных
+  save_float16: true
+
+# --- MODEL ---
+model:
+  name: "unet"
+  encoder: "timm-efficientnet-b3"
+  encoder_weights: "imagenet"
+  in_channels: 1 # Будет вычисляться автоматически, если `feature_bank.use: true`
+  classes: 1
+  
+  adapter:
+    use: false # По умолчанию выключено
+    out_channels: 3
+    init: "xavier"
+    freeze_encoder_epochs: 5
+
+# --- TRAINING ---
+train:
+  epochs: 50
+  batch_size: 8
+  num_workers: 2
+  amp: true # Automatic Mixed Precision
+  
+  # Сплиты данных
+  splits:
+    train_file: "train.txt"
+    val_file: "val.txt"
+    # test_file будет использоваться в evaluate.py
+
+  optimizer:
+    name: "adamw"
+    lr: 3.0e-4
+    weight_decay: 1.0e-4
+  
+  scheduler:
+    name: "cosine"
+    params: {}
+
+# --- LOSS ---
+loss:
+  name: "dice_bce"
+  params:
+    dice_weight: 0.5
+    bce_weight: 0.5
+    pos_weight: 1.0 # Для BCEWithLogitsLoss
+
+# --- EVALUATION ---
+eval:
+  batch_size: 16
+  test_split_file: "test.txt"
+  # Метрики, которые нужно посчитать
+  metrics: ["dice", "iou", "bf1", "assd", "v_rand", "warping"]
+
+# --- LOGGING ---
+logging:
+  # DEV: MLflow - отличный выбор для трекинга.
+  # Артефакты (модели, конфиги) будут храниться локально.
+  backend: "mlflow"
+  experiment_name: "domain_shift_segmentation"
+  artifact_uri: "./mlruns" # Путь для сохранения артефактов MLflow

@@ -1,0 +1,17 @@
+# configs/exp/test_baseline.yaml
+
+# DEV: Этот конфиг предназначен для отладки базового пайплайна.
+# Он использует `base.yaml` для всех настроек, меняя только пути.
+
+data:
+  # Указываем на конкретный подготовленный датасет
+  prepared_data_root: "../prepared_data/isbi2012_v1_raw" 
+  # Указываем, куда сохранять тайлы для этого эксперимента
+  interim_data_root: "./interim_data/isbi2012_baseline"
+
+# Явно отключаем feature bank и адаптер для baseline-эксперимента
+model:
+  feature_bank:
+    use: false
+  adapter:
+    use: false
