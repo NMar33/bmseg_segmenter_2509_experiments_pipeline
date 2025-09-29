@@ -13,10 +13,10 @@ from segmentation_models_pytorch.losses import DiceLoss, SoftBCEWithLogitsLoss
 import mlflow
 from tqdm import tqdm
 
-from src.utils import set_seed, load_config, flatten_config
-from src.data.dataset import TilesDataset, default_train_aug
-from src.models.model_builder import build_model
-from src.metrics.core import dice_score
+from segwork.utils import set_seed, load_config, flatten_config
+from segwork.data.dataset import TilesDataset, default_train_aug
+from segwork.models.model_builder import build_model
+from segwork.metrics.core import dice_score
 
 def load_tile_ids(interim_root: Path, split_files: dict) -> dict:
     """Finds all tile IDs and splits them based on original image splits."""

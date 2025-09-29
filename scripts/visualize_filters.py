@@ -20,9 +20,9 @@ import tifffile as tiff
 import cv2
 
 # Import components from our ML pipeline's source code
-from src.data import filters as filter_functions
-from src.visualization.plotter import Plotter
-from src.visualization.generators import (
+from segwork.data import filters as filter_functions
+from segwork.visualization.plotter import Plotter
+from segwork.visualization.generators import (
     generate_raw_panel,
     generate_overlay_panel,
     generate_filter_panel

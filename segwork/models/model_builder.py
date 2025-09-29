@@ -7,7 +7,7 @@ from typing import Dict, Any
 import torch.nn as nn
 from segmentation_models_pytorch import Unet
 
-from src.models.adapter import ChannelAdapter
+from segwork.models.adapter import ChannelAdapter
 
 def build_model(config: Dict[str, Any]) -> nn.Module:
     """

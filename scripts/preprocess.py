@@ -12,8 +12,8 @@ import tifffile as tiff
 import cv2
 from tqdm import tqdm
 
-from src.utils import load_config
-from src.data.filters import build_feature_stack
+from segwork.utils import load_config
+from segwork.data.filters import build_feature_stack
 
 def main():
     parser = argparse.ArgumentParser(description="Preprocess data into tiles and feature banks.")

@@ -14,11 +14,11 @@ import tifffile as tiff
 import cv2
 from tqdm import tqdm
 
-from src.utils import load_config, load_split_ids
-from src.models.model_builder import build_model
-from src.data.filters import build_feature_stack
-from src.data.stitching import stitch_tiles
-from src.metrics.core import dice_score
+from segwork.utils import load_config, load_split_ids
+from segwork.models.model_builder import build_model
+from segwork.data.filters import build_feature_stack
+from segwork.data.stitching import stitch_tiles
+from segwork.metrics.core import dice_score
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained segmentation model.")
