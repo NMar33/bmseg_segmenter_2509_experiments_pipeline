@@ -12,12 +12,12 @@ import matplotlib.pyplot as plt
 import tifffile as tiff
 import cv2
 import numpy as np
-
 import yaml
 import itertools
-from ..data import filters as filter_functions # Используем относительный импорт
-from .plotter import Plotter
-from .generators import (
+
+from segwork.data import filters as filter_functions
+from segwork.visualization.plotter import Plotter
+from segwork.visualization.generators import (
     generate_raw_panel,
     generate_overlay_panel,
     generate_filter_panel
