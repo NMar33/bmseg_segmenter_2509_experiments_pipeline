@@ -9,6 +9,8 @@ import yaml
 import numpy as np
 import torch
 
+from pathlib import Path
+
 def set_seed(seed: int):
     """Sets the seed for reproducibility."""
     random.seed(seed)
@@ -67,3 +69,14 @@ def load_config(config_path: str) -> dict:
     # Создаем копию, чтобы не изменять исходный базовый словарь в памяти
     config = copy.deepcopy(base_config)
     return deep_update(config, exp_config)
+
+def load_split_ids(split_dir: Path, split_file: str) -> List[str]:
+    """Loads a list of original image IDs from a split file."""
+    # DEV: Простая, но важная функция, чтобы не дублировать код
+    # чтения файлов сплитов в train.py и evaluate.py.
+    split_path = split_dir / split_file
+    if not split_path.exists():
+        raise FileNotFoundError(f"Split file not found: {split_path}")
+    with open(split_path, 'r') as f:
+        ids = [line.strip() for line in f if line.strip()]
+    return ids
