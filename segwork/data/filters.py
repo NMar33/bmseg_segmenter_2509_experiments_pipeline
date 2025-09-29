@@ -64,22 +64,11 @@ def gabor(
 ) -> np.ndarray:
     """
     Applies a Gabor filter to the image.
-
-    Args:
-        img: Input image (works best on uint8).
-        ksize: Size of the Gabor kernel.
-        theta_deg: Orientation of the filter in degrees.
-        sigma: Standard deviation of the Gaussian envelope.
-        lambd: Wavelength of the sinusoidal factor.
-        gamma: Spatial aspect ratio.
-        psi: Phase offset.
-
-    Returns:
-        The filtered image as a float32 array.
+    ... (docstring)
     """
-    # DEV: Фильтр Габора очень мощный для текстур и ориентированных структур.
-    # theta_deg - самый важный параметр для наших экспериментов.
-    theta_rad = theta_deg * pi / 180.0
+    # DEV: Используем np.pi для консистентности с остальным кодом,
+    # основанным на NumPy. Это лучшая практика.
+    theta_rad = theta_deg * np.pi / 180.0
     kernel = cv2.getGaborKernel(
         (ksize, ksize), sigma, theta_rad, lambd, gamma, psi, ktype=cv2.CV_32F
     )
