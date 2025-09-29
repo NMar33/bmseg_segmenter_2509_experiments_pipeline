@@ -13,6 +13,15 @@ import tifffile as tiff
 import cv2
 import numpy as np
 
+import yaml
+import itertools
+from ..data import filters as filter_functions # Используем относительный импорт
+from .plotter import Plotter
+from .generators import (
+    generate_raw_panel,
+    generate_overlay_panel,
+    generate_filter_panel
+)
 
 def explore_random_samples(
     dataset_path: str | Path,
@@ -106,3 +115,78 @@ def explore_random_samples(
     plt.show()
     
     return selected_ids
+
+def visualize_filters_for_image(config: dict):
+    """
+    Loads data and generates a filter visualization plot based on a config dictionary.
+    Designed to be called directly from a notebook.
+
+    Args:
+        config: A dictionary with the same structure as a visualize_filters.yaml file.
+    """
+    # DEV: Эта функция - это, по сути, тело скрипта `visualize_filters.py`,
+    # но без парсинга аргументов. Она принимает готовый конфиг.
+
+    # 1. Загрузка данных
+    print("Loading data...")
+    input_cfg = config['input_data']
+    img_path = Path(input_cfg['image_source'])
+    image = tiff.imread(img_path)
+    
+    gt_mask_path = input_cfg.get('gt_mask_source')
+    gt_mask = cv2.imread(str(gt_mask_path), cv2.IMREAD_GRAYSCALE) if gt_mask_path else None
+    
+    pred_mask_path = input_cfg.get('pred_mask_source')
+    pred_mask = cv2.imread(str(pred_mask_path), cv2.IMREAD_GRAYSCALE) if pred_mask_path else None
+
+    # 2. Инициализация отрисовщика
+    plotter = Plotter(config['output']['style'])
+
+    # 3. Добавление базовых панелей
+    plotter.add_panel(generate_raw_panel(image), "Original Image")
+    if gt_mask is not None:
+        plotter.add_panel(generate_overlay_panel(image, gt_mask, color=(0, 255, 0)), "Ground Truth")
+    if pred_mask is not None:
+        plotter.add_panel(generate_overlay_panel(image, pred_mask, color=(255, 0, 0)), "Prediction")
+
+    # 4. Применение и добавление фильтров
+    print("Applying filters...")
+    FILTER_CATALOG = {
+        "clahe": filter_functions.apply_clahe,
+        "scharr": filter_functions.scharr_mag,
+        "laplacian": filter_functions.laplacian,
+        "log_sigma": filter_functions.log_filter,
+        "frangi": filter_functions.frangi_filter,
+        "gabor": filter_functions.gabor,
+    }
+    
+    for filter_cfg in config.get('filters_to_visualize', []):
+        name = filter_cfg['name']
+        params = filter_cfg.get('params', {})
+        param_names = list(params.keys())
+        param_values = [v if isinstance(v, list) else [v] for v in params.values()]
+        
+        for param_combination in itertools.product(*param_values):
+            current_params = dict(zip(param_names, param_combination))
+            title = f"{name.capitalize()}\n" + ", ".join(f"{k}={v}" for k, v in current_params.items())
+            
+            filter_func = FILTER_CATALOG.get(name)
+            if not filter_func: continue
+            
+            img_u8 = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+            input_image_for_filter = image if name in ['frangi'] else img_u8
+            
+            filtered_img = filter_func(input_image_for_filter, **current_params)
+            panel = generate_filter_panel(filtered_img, config['output']['style'].get('colormap', 'viridis'))
+            plotter.add_panel(panel, title.strip())
+
+    # 5. Рендеринг
+    print("Rendering plot...")
+    output_cfg = config['output']
+    save_path = None
+    if output_cfg.get('save_dir'):
+        save_dir = Path(output_cfg['save_dir'])
+        save_path = save_dir / f"{img_path.stem}_filter_visualization.png"
+
+    # `show=True` теперь будет работать, так как мы в сессии ноутбука
+    plotter.render(save_path=save_path, show=output_cfg.get('show_interactive', True))
