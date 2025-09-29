@@ -1,1 +1,22 @@
+# --- Core Data & IO ---
+numpy
+pyyaml
+opencv-python-headless
+imageio
+tifffile
+tqdm
+pandas
+
+# --- ML & Segmentation ---
+# DEV: Указываем версии для воспроизводимости. Можно убрать, если не критично.
+torch>=1.13
+torchvision
+segmentation-models-pytorch==0.3.3
+albumentations>=1.3.0
+scikit-image
+
+# --- Experiment Tracking ---
+mlflow>=2.0
+
+# --- Visualization (Optional but recommended) ---
 matplotlib
