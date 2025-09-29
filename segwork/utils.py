@@ -1,4 +1,4 @@
-# src/utils.py
+# segwork/utils.py
 
 """
 Common utility functions for the ML pipeline.

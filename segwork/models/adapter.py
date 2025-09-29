@@ -1,4 +1,4 @@
-# src/models/adapter.py
+# segwork/models/adapter.py
 
 """
 A learnable 1x1 convolution layer to adapt the number of input channels.

@@ -1,4 +1,4 @@
-# /src/data/dataset.py
+# /segwork/data/dataset.py
 
 """
 PyTorch Dataset classes for reading preprocessed data.

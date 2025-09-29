@@ -1,4 +1,4 @@
-# src/visualization/generators.py
+# segwork/visualization/generators.py
 
 """
 Functions to generate visual panels (NumPy arrays) for plotting.

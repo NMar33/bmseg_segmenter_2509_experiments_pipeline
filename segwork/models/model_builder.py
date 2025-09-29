@@ -1,4 +1,4 @@
-# src/models/model_builder.py
+# segwork/models/model_builder.py
 
 """
 Factory function for creating segmentation models based on the configuration.

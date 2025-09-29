@@ -1,0 +1,43 @@
+# ===============================================
+# EXPERIMENT: ISBI - In-Domain
+# MODEL M3: Feature Bank (Features -> Pre-trained)
+# ===============================================
+
+# --- DATA ---
+data:
+  prepared_data_root: "../prepared_data/isbi2012_v1_raw"
+  # Отдельная папка для многоканальных тайлов
+  interim_data_root: "./interim_data/isbi_M3_feature_bank"
+  
+  # Включаем Feature Bank и выбираем каналы
+  feature_bank:
+    use: true
+    base_norm: zscore
+    channels:
+      - raw          # Нормализованное сырое изображение
+      - clahe        # Улучшение локального контраста
+      - scharr       # Выделение градиентов/границ
+      - laplacian    # Выделение "острых" краев
+      - log_sigma1   # "Блобы" и края в масштабе sigma=1
+      - log_sigma2   # "Блобы" и края в масштабе sigma=2
+      # - frangi       # DEV: Фильтр Франги здесь может быть не так полезен,
+                       # так как мы ищем мембраны, а не сосуды. Оставим его для
+                       # датасетов с волокнами.
+
+# --- MODEL ---
+model:
+  # Используем предобученные веса
+  encoder_weights: "imagenet"
+  
+  # Включаем адаптер. Он будет преобразовывать наши N каналов в 3
+  adapter:
+    use: true
+    out_channels: 3
+    freeze_encoder_epochs: 3
+
+# --- LOGGING ---
+logging:
+  mlflow_tags:
+    experiment_type: "A_InDomain"
+    dataset: "isbi"
+    model_type: "M3_FeatureBank"

@@ -1,4 +1,4 @@
-# src/data/stitching.py
+# segwork/data/stitching.py
 
 """
 Utility for stitching overlapping tile predictions back into a full image mask.

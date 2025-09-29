@@ -1,0 +1,36 @@
+# ===============================================
+# EXPERIMENT: ISBI - In-Domain
+# MODEL M2: Adapter Baseline (Raw -> Pre-trained)
+# ===============================================
+
+# --- DATA ---
+data:
+  # Используем те же канонические данные
+  prepared_data_root: "../prepared_data/isbi2012_v1_raw" 
+  # Промежуточные данные для этой модели. Они будут 1-канальными,
+  # но мы используем отдельную папку для чистоты эксперимента.
+  interim_data_root: "./interim_data/isbi_M2_adapter"
+  
+  # Feature bank все еще отключен
+  feature_bank:
+    use: false
+
+# --- MODEL ---
+model:
+  # Используем предобученные на ImageNet веса
+  encoder_weights: "imagenet"
+  
+  # Включаем адаптер для преобразования 1 канала в 3
+  adapter:
+    use: true
+    out_channels: 3 # Стандарт для ImageNet-энкодеров
+    # DEV: Можно поэкспериментировать с заморозкой энкодера на несколько
+    # первых эпох, чтобы сначала обучился только адаптер.
+    freeze_encoder_epochs: 3
+
+# --- LOGGING ---
+logging:
+  mlflow_tags:
+    experiment_type: "A_InDomain"
+    dataset: "isbi"
+    model_type: "M2_Adapter"

@@ -1,4 +1,4 @@
-# src/data/filters.py
+# segwork/data/filters.py
 
 """
 Functions for applying classical image filters to create a multi-channel feature bank.

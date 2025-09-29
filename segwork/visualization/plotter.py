@@ -1,4 +1,4 @@
-# src/visualization/plotter.py
+# segwork/visualization/plotter.py
 
 """
 A helper class to manage and render a grid of image panels using Matplotlib.

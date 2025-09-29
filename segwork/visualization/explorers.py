@@ -1,4 +1,4 @@
-# src/visualization/explorers.py
+# segwork/visualization/explorers.py
 
 """
 Functions for interactive exploration of datasets, designed to be called
