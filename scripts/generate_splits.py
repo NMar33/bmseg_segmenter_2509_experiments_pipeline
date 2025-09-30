@@ -14,28 +14,34 @@ different seeds without re-calculating tiles.
 import argparse
 import random
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, Set
 import pandas as pd
 
 from segwork.utils import load_config
 
 def resolve_data_splits(
     df_master: pd.DataFrame,
-    split_config: dict,
+    split_gen_config: dict,
     seed: int
 ) -> Dict[str, Set[str]]:
     """
     Resolves train, validation, and test sets of SOURCE IMAGE IDs based on the config.
     """
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # `split_gen_config` - это вся секция `split_generation`. Нам нужно
+    # сначала обратиться к `source_splits` внутри нее.
+    source_splits_config = split_gen_config['source_splits']
+    
     source_ids: Dict[str, Set[str]] = {"train": set(), "val": set(), "test": set()}
 
     # --- Step 1: Populate sets from explicitly defined folders ---
+    print("Step 1: Populating splits from explicit folder definitions...")
     for split_name in ["train", "val", "test"]:
-        cfg_val = split_config.get(split_name)
+        cfg_val = source_splits_config.get(split_name)
         if isinstance(cfg_val, list):
-            source_ids[split_name].update(
-                df_master[df_master['source_split'].isin(cfg_val)]['source_image_id'].unique()
-            )
+            unique_ids = df_master[df_master['source_split'].isin(cfg_val)]['source_image_id'].unique()
+            source_ids[split_name].update(unique_ids)
+            print(f"  - Found {len(unique_ids)} source images for '{split_name}' from folders: {cfg_val}")
 
     # --- Step 2: Check for overlaps from explicit folder definitions ---
     if source_ids['train'].intersection(source_ids['val']):
@@ -46,8 +52,9 @@ def resolve_data_splits(
         raise ValueError("Config Error: `val` and `test` source folders overlap.")
 
     # --- Step 3: Carve out validation set if defined as a fraction ---
-    val_cfg = split_config.get('val')
+    val_cfg = source_splits_config.get('val')
     if isinstance(val_cfg, float):
+        print("Step 3: Carving out validation set from train set...")
         if source_ids['val']:
             raise ValueError("Config Error: Cannot specify both folder list and fraction for `val` split.")
         
@@ -63,18 +70,19 @@ def resolve_data_splits(
         val_ids_to_move = set(train_list[:val_size])
         source_ids['val'].update(val_ids_to_move)
         source_ids['train'].difference_update(val_ids_to_move)
+        print(f"  - Moved {len(source_ids['val'])} source images to validation set.")
 
     # --- Step 4: Carve out test set if defined as a fraction ---
-    test_cfg = split_config.get('test')
+    test_cfg = source_splits_config.get('test')
     if isinstance(test_cfg, float):
+        print("Step 4: Carving out test set...")
         if source_ids['test']:
             raise ValueError("Config Error: Cannot specify both folder list and fraction for `test` split.")
         
         test_frac = test_cfg
         
-        # Determine the source pool for carving out the test set
         if not source_ids['val']:
-            raise ValueError("Config Error: Cannot create 'test' set from a fraction because 'val' set is not defined.")
+            raise ValueError("Config Error: Cannot create 'test' set from a fraction because 'val' set is not defined. Please define 'val' using a folder or a fraction.")
         
         source_list = sorted(list(source_ids['val']))
         rng = random.Random(seed)
@@ -87,6 +95,7 @@ def resolve_data_splits(
         test_ids_to_move = set(source_list[:test_size])
         source_ids['test'].update(test_ids_to_move)
         source_ids['val'].difference_update(test_ids_to_move)
+        print(f"  - Moved {len(source_ids['test'])} source images from validation to test set.")
 
     return source_ids
 
@@ -110,20 +119,20 @@ def main():
     # Resolve the sets of source image IDs for train, val, and test
     source_id_sets = resolve_data_splits(df_master, data_cfg['split_generation'], args.seed)
     
-    # Create the output directory for this seed's splits
     output_dir = interim_root / "splits" / f"seed_{args.seed}"
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save the tile IDs for each split to a .txt file
     for split_name, ids_set in source_id_sets.items():
         if not ids_set:
+            if split_name == 'train':
+                raise ValueError("Train set is empty after splitting. This should not happen. Check your config.")
             print(f"Warning: {split_name} set is empty for seed {args.seed}.")
-            (output_dir / f"{split_name}.txt").write_text("") # Create empty file
+            (output_dir / f"{split_name}.txt").write_text("")
             continue
             
         tile_ids = df_master[df_master['source_image_id'].isin(ids_set)]['tile_id'].tolist()
         
-        print(f"Split '{split_name}': {len(ids_set)} source images -> {len(tile_ids)} tiles.")
+        print(f"Final Split '{split_name}': {len(ids_set)} source images -> {len(tile_ids)} tiles.")
         (output_dir / f"{split_name}.txt").write_text("\n".join(sorted(tile_ids)))
 
     print(f"\n--- Splits for seed {args.seed} generated successfully! ---")
