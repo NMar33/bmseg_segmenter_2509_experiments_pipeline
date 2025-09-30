@@ -11,6 +11,9 @@ split files, and runs the training loop.
 """
 import argparse
 from pathlib import Path
+import shutil
+from typing import List, Dict, Any
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -24,6 +27,9 @@ from segwork.data.dataset import TilesDataset, default_train_aug
 from segwork.models.model_builder import build_model
 from segwork.metrics.core import dice_score
 
+from segwork.visualization.plotter import Plotter
+from segwork.visualization.generators import generate_raw_panel, generate_overlay_panel
+
 def load_tile_ids_from_file(split_path: Path) -> list[str]:
     """Reads a list of tile IDs from a .txt file."""
     if not split_path.exists():
@@ -31,6 +37,62 @@ def load_tile_ids_from_file(split_path: Path) -> list[str]:
         return []
     with open(split_path, 'r') as f:
         return [line.strip() for line in f if line.strip()]
+
+def log_validation_visuals(
+    model: torch.nn.Module,
+    val_samples: List[tuple],
+    epoch: int,
+    viz_config: Dict[str, Any],
+    device: torch.device,
+    amp_enabled: bool
+):
+    """Generates and logs validation preview images to MLflow."""
+    if not val_samples:
+        return
+        
+    print("Generating validation previews...")
+    model.eval()
+    
+    viz_style = viz_config.get('style', {})
+    plotter = Plotter(viz_style)
+    
+    with torch.no_grad():
+        for i, (image_tensor, mask_tensor) in enumerate(val_samples):
+            # DEV: Мы делаем инференс на CPU, чтобы не занимать GPU память,
+            # и работаем с numpy для визуализации.
+            image_np = image_tensor.squeeze().numpy() # Убираем C и N измерения
+            gt_mask_np = mask_tensor.squeeze().numpy()
+            
+            # Делаем предсказание
+            input_tensor = image_tensor.unsqueeze(0).to(device) # Добавляем N измерение
+            with torch.amp.autocast(device_type=device.type, enabled=amp_enabled):
+                logits = model(input_tensor)
+            probs = torch.sigmoid(logits)
+            pred_mask_np = probs.squeeze().cpu().numpy()
+
+            # Собираем панель [Input | GT Overlay | Pred Overlay]
+            plotter.add_panel(generate_raw_panel(image_np), f"Sample {i+1} - Input")
+            
+            gt_color = viz_style.get('gt_color_rgb', [0, 170, 0])
+            plotter.add_panel(generate_overlay_panel(image_np, gt_mask_np, color=gt_color), "Ground Truth")
+            
+            pred_color = viz_style.get('pred_color_rgb', [227, 27, 27])
+            plotter.add_panel(generate_overlay_panel(image_np, pred_mask_np > 0.5, color=pred_color), f"Prediction (Epoch {epoch+1})")
+    
+    # Сохраняем и логируем
+    temp_viz_dir = Path("./temp_train_viz")
+    temp_viz_dir.mkdir(exist_ok=True)
+    save_path = temp_viz_dir / f"validation_epoch_{epoch+1:03d}.png"
+    
+    plotter.render(
+        save_path=save_path,
+        suptitle=f"Validation Samples - Epoch {epoch+1}",
+        force_cols=3,
+        show=False
+    )
+    
+    mlflow.log_artifact(str(save_path), artifact_path="validation_previews")
+    shutil.rmtree(temp_viz_dir)
 
 def main():
     parser = argparse.ArgumentParser(description="Train a segmentation model for a specific seed.")
@@ -48,8 +110,6 @@ def main():
     print(f"Using device: {device_type}")
     
     # --- 1. Data Loading ---
-    # DEV: Логика загрузки данных стала предельно простой и явной.
-    # Мы просто формируем путь к нужным файлам, используя `seed`.
     interim_root = Path(cfg['data']['interim_data_root'])
     splits_dir = interim_root / "splits" / f"seed_{args.seed}"
 
@@ -66,6 +126,22 @@ def main():
     dl_val = DataLoader(ds_val, batch_size=cfg['eval']['batch_size'], shuffle=False, num_workers=cfg['train']['num_workers'], pin_memory=(device_type == 'cuda')) if ds_val else None
     print(f"Data loaded: {len(ds_train)} train tiles, {len(ds_val) if ds_val else 0} validation tiles.")
 
+    # --- 1.1 Select fixed samples for visualization ---
+    fixed_val_samples = []
+    viz_cfg = cfg['train'].get('validation_visualization', {})
+    if viz_cfg.get('enabled', False) and ds_val:
+        num_samples = viz_cfg.get('num_samples', 4)
+        num_to_sample = min(num_samples, len(ds_val))
+        
+        g = torch.Generator()
+        g.manual_seed(args.seed)
+        indices = torch.randperm(len(ds_val), generator=g)[:num_to_sample].tolist()
+        
+        for idx in indices:
+            img_tensor, mask_tensor = ds_val[idx]
+            fixed_val_samples.append((img_tensor, mask_tensor))
+        print(f"Selected {len(fixed_val_samples)} fixed samples for validation visualization.")
+
     # --- 2. Model, Optimizer, Loss ---
     model = build_model(cfg).to(device)
     
@@ -77,7 +153,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['train']['epochs'])
     
     dice_loss = DiceLoss(mode='binary', from_logits=True)
-    bce_loss = SoftBCEWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
+    bce_loss = SoftBceWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
     loss_weights = {'dice': cfg['loss']['params']['dice_weight'], 'bce': cfg['loss']['params']['bce_weight']}
 
     scaler = torch.amp.GradScaler(device_type, enabled=cfg['train']['amp'])
@@ -134,6 +210,18 @@ def main():
             print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}, Val Dice = {avg_val_dice:.4f}")
             mlflow.log_metrics({"train_loss": avg_train_loss, "val_dice": avg_val_dice, "lr": optimizer.param_groups[0]['lr']}, step=epoch)
 
+            # --- Validation Visualization ---
+            if fixed_val_samples:
+                log_validation_visuals(
+                    model=model,
+                    val_samples=fixed_val_samples,
+                    epoch=epoch,
+                    viz_config=viz_cfg,
+                    device=device,
+                    amp_enabled=cfg['train']['amp']
+                )
+
+            # --- Save Best Model ---
             if avg_val_dice > best_val_dice:
                 best_val_dice = avg_val_dice
                 mlflow.log_metric("best_val_dice", best_val_dice, step=epoch)
@@ -141,6 +229,3 @@ def main():
                 torch.save(model.state_dict(), checkpoint_path)
                 mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
                 print(f"New best model saved with Dice: {best_val_dice:.4f}")
-
-if __name__ == "__main__":
-    main()

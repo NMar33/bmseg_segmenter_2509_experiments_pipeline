@@ -85,6 +85,23 @@ train:
   num_workers: 2
   amp: true
   
+  # --- НОВЫЙ БЛОК ЗДЕСЬ ---
+  # Configures visualization of validation samples during training.
+  validation_visualization:
+    enabled: true        # Master switch to log validation previews to MLflow.
+    num_samples: 4       # How many fixed validation samples to show per epoch.
+    # DEV: Мы можем переиспользовать стили из секции `eval.visualization`,
+    # но лучше определить их здесь явно для независимости модулей.
+    style:
+      figsize_per_panel: [5, 5]
+      dpi: 100 # Меньше DPI для более "легких" артефактов
+      title_fontsize: 10
+      suptitle_fontsize: 14
+      # Используем те же цвета, что и в `eval`
+      gt_color_rgb: [0, 170, 0]
+      pred_color_rgb: [227, 27, 27]
+      overlay_alpha: 0.4
+  
   optimizer:
     name: "adamw"
     lr: 3.0e-4
