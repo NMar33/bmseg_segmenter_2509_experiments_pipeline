@@ -4,12 +4,16 @@
 Script for the second stage of preprocessing: Split Generation.
 
 This script reads the `master_split.csv` file created by `preprocess_tiles.py`
-and generates the final `train.txt`, `val.txt`, and `test.txt` files based on
-the splitting strategy defined in the config and a specific random seed.
+and generates explicit split files for both source images and tiles based on
+the splitting strategy in the config and a specific random seed.
 
-It creates a dedicated folder for each seed's splits inside `interim_data/splits/`.
-This is a fast, lightweight operation that can be run multiple times for
-different seeds without re-calculating tiles.
+For each seed, it creates a dedicated folder (e.g., `splits/seed_42/`) containing:
+- `train_images.txt`: List of source image IDs for the training set.
+- `train_tiles.txt`: List of all tile IDs corresponding to the training images.
+- `val_images.txt`, `val_tiles.txt`: Corresponding files for the validation set.
+- `test_images.txt`, `test_tiles.txt`: Corresponding files for the test set.
+
+This makes downstream tasks (`train`, `evaluate`) simpler and more explicit.
 """
 import argparse
 import random
@@ -27,11 +31,7 @@ def resolve_data_splits(
     """
     Resolves train, validation, and test sets of SOURCE IMAGE IDs based on the config.
     """
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-    # `split_gen_config` - это вся секция `split_generation`. Нам нужно
-    # сначала обратиться к `source_splits` внутри нее.
     source_splits_config = split_gen_config['source_splits']
-    
     source_ids: Dict[str, Set[str]] = {"train": set(), "val": set(), "test": set()}
 
     # --- Step 1: Populate sets from explicitly defined folders ---
@@ -79,10 +79,8 @@ def resolve_data_splits(
         if source_ids['test']:
             raise ValueError("Config Error: Cannot specify both folder list and fraction for `test` split.")
         
-        test_frac = test_cfg
-        
         if not source_ids['val']:
-            raise ValueError("Config Error: Cannot create 'test' set from a fraction because 'val' set is not defined. Please define 'val' using a folder or a fraction.")
+            raise ValueError("Config Error: Cannot create 'test' set from a fraction because 'val' set is not defined.")
         
         source_list = sorted(list(source_ids['val']))
         rng = random.Random(seed)
@@ -122,19 +120,23 @@ def main():
     output_dir = interim_root / "splits" / f"seed_{args.seed}"
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Сохраняем два типа файлов ---
     for split_name, ids_set in source_id_sets.items():
-        if not ids_set:
+        # --- 1. Save `_images.txt` file ---
+        sorted_image_ids = sorted(list(ids_set))
+        if not sorted_image_ids:
             if split_name == 'train':
-                raise ValueError("Train set is empty after splitting. This should not happen. Check your config.")
+                raise ValueError("Train set is empty after splitting. This is not allowed.")
             print(f"Warning: {split_name} set is empty for seed {args.seed}.")
-            (output_dir / f"{split_name}.txt").write_text("")
-            continue
             
-        tile_ids = df_master[df_master['source_image_id'].isin(ids_set)]['tile_id'].tolist()
-        
-        print(f"Final Split '{split_name}': {len(ids_set)} source images -> {len(tile_ids)} tiles.")
-        (output_dir / f"{split_name}.txt").write_text("\n".join(sorted(tile_ids)))
+        (output_dir / f"{split_name}_images.txt").write_text("\n".join(sorted_image_ids))
+        print(f"Split '{split_name}': {len(sorted_image_ids)} source images.")
 
+        # --- 2. Save `_tiles.txt` file ---
+        tile_ids = df_master[df_master['source_image_id'].isin(ids_set)]['tile_id'].tolist()
+        (output_dir / f"{split_name}_tiles.txt").write_text("\n".join(sorted(tile_ids)))
+        print(f"  └─ Corresponds to {len(tile_ids)} tiles.")
+        
     print(f"\n--- Splits for seed {args.seed} generated successfully! ---")
     print(f"Split files are located in: {output_dir}")
 

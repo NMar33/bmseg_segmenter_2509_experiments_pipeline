@@ -8,7 +8,7 @@
 # --- Experiment Control ---
 # A list of random seeds this experiment will be run on.
 # The `run_experiment.py` orchestrator will iterate through this list.
-run_seeds: [42, 1337, 2023]
+# run_seeds: [42, 1337, 2023]
 
 # Custom tags to be logged in MLflow for easy filtering and organization.
 mlflow_tags:
@@ -47,16 +47,16 @@ data:
       - log_sigma1   # Blob/edge detection at scale sigma=1
       - log_sigma2   # Blob/edge detection at scale sigma=2
 
-# --- MODEL ---
-model:
-  # We use a pretrained encoder to leverage transfer learning.
-  encoder_weights: "imagenet"
+# # --- MODEL ---
+# model:
+#   # We use a pretrained encoder to leverage transfer learning.
+#   encoder_weights: "imagenet"
   
-  # The adapter is required to map our N-channel feature bank (6 channels in this case)
-  # to the 3 channels expected by the ImageNet-pretrained encoder.
-  adapter:
-    use: true
-    out_channels: 3
-    # DEV: Freezing the encoder for a few epochs allows the adapter to learn a
-    # reasonable initial projection before the entire network is fine-tuned.
-    freeze_encoder_epochs: 3
+#   # The adapter is required to map our N-channel feature bank (6 channels in this case)
+#   # to the 3 channels expected by the ImageNet-pretrained encoder.
+#   adapter:
+#     use: true
+#     out_channels: 3
+#     # DEV: Freezing the encoder for a few epochs allows the adapter to learn a
+#     # reasonable initial projection before the entire network is fine-tuned.
+#     freeze_encoder_epochs: 3

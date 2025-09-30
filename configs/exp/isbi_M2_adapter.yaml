@@ -1,36 +1,48 @@
+# configs\exp\isbi_M2_adapter.yaml
+
 # ===============================================
 # EXPERIMENT: ISBI - In-Domain
 # MODEL M2: Adapter Baseline (Raw -> Pre-trained)
 # ===============================================
 
+# --- Experiment Control ---
+# A list of random seeds this experiment will be run on.
+# run_seeds: [42, 1337, 2023]
+
+# Custom tags for MLflow to identify this specific experiment.
+mlflow_tags:
+  experiment_type: "A_InDomain"
+  dataset: "isbi"
+  model_type: "M2_Adapter"
+
 # --- DATA ---
 data:
-  # Используем те же канонические данные
-  prepared_data_root: "../prepared_data/isbi2012_v1_raw" 
-  # Промежуточные данные для этой модели. Они будут 1-канальными,
-  # но мы используем отдельную папку для чистоты эксперимента.
+  # Define the data source and the location for intermediate files.
+  # The interim data will be single-channel, but we use a separate folder
+  # to keep the experiments clean and isolated.
+  prepared_data_root: "../prepared_data/isbi2012_v1_raw"
   interim_data_root: "./interim_data/isbi_M2_adapter"
   
-  # Feature bank все еще отключен
+  # Use the same splitting strategy as in the M3 experiment for a fair comparison.
+  split_generation:
+    source_splits:
+      train: ["train"]
+      val: 0.20
+      test: ["test"]
+
+  # The feature bank is explicitly disabled for this baseline model.
+  # `preprocess-tiles` will generate single-channel z-scored tiles.
   feature_bank:
     use: false
 
 # --- MODEL ---
-model:
-  # Используем предобученные на ImageNet веса
-  encoder_weights: "imagenet"
+# model:
+#   # Use a pretrained encoder to test the effect of transfer learning alone.
+#   encoder_weights: "imagenet"
   
-  # Включаем адаптер для преобразования 1 канала в 3
-  adapter:
-    use: true
-    out_channels: 3 # Стандарт для ImageNet-энкодеров
-    # DEV: Можно поэкспериментировать с заморозкой энкодера на несколько
-    # первых эпох, чтобы сначала обучился только адаптер.
-    freeze_encoder_epochs: 3
-
-# --- LOGGING ---
-logging:
-  mlflow_tags:
-    experiment_type: "A_InDomain"
-    dataset: "isbi"
-    model_type: "M2_Adapter"
+#   # The adapter is required to map the 1-channel raw input to the 3 channels
+#   # expected by the ImageNet-pretrained encoder.
+#   adapter:
+#     use: true
+#     out_channels: 3
+#     freeze_encoder_epochs: 3

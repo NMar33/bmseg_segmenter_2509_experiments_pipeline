@@ -10,7 +10,7 @@
 # A list of random seeds to run the experiment on.
 # The `run_experiment.py` orchestrator will iterate through this list,
 # creating a separate run for each seed.
-run_seeds: [42, 1337, 2023]
+run_seeds: [42, 11] #[42, 1337, 2023]
 
 # --- DATA CONFIGURATION ---
 data:
@@ -71,14 +71,16 @@ model:
   classes: 1
   
   adapter:
-    use: false
+    use: true
     out_channels: 3
     init: "xavier"
-    freeze_encoder_epochs: 0
+    # DEV: Freezing the encoder for a few epochs allows the adapter to learn a
+    # reasonable initial projection before the entire network is fine-tuned.
+    freeze_encoder_epochs: 1
 
 # --- TRAINING CONFIGURATION ---
 train:
-  epochs: 7
+  epochs: 3
   batch_size: 8
   num_workers: 2
   amp: true

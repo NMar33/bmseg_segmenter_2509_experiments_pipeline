@@ -1,32 +1,44 @@
+# configs\exp\isbi_M1_baseline.yaml
+
 # ===============================================
 # EXPERIMENT: ISBI - In-Domain
-# MODEL M1: Baseline (Raw -> Scratch)
+# MODEL M1: Baseline (Raw Input -> Train from Scratch)
 # ===============================================
+
+# --- Experiment Control ---
+# A list of random seeds this experiment will be run on.
+# run_seeds: [42, 1337, 2023]
+
+# Custom tags for MLflow to identify this specific experiment.
+mlflow_tags:
+  experiment_type: "A_InDomain"
+  dataset: "isbi"
+  model_type: "M1_Baseline"
 
 # --- DATA ---
 data:
-  # Источник канонических данных
-  prepared_data_root: "../prepared_data/isbi2012_v1_raw" 
-  # Куда сохранять тайлы для этого конкретного эксперимента
+  # Define the data source and the location for intermediate files.
+  prepared_data_root: "../prepared_data/isbi2012_v1_raw"
   interim_data_root: "./interim_data/isbi_M1_baseline"
   
-  # Отключаем feature bank, так как это baseline
+  # Use the same splitting strategy as in other experiments for a fair comparison.
+  split_generation:
+    source_splits:
+      train: ["train"]
+      val: 0.20
+      test: ["test"]
+
+  # The feature bank is explicitly disabled for this baseline model.
   feature_bank:
     use: false
 
 # --- MODEL ---
 model:
-  # Энкодер обучается с нуля (не использует веса ImageNet)
+  # Crucial for this baseline: train the encoder from scratch without ImageNet pretraining.
+  # This isolates the effect of the model architecture itself.
   encoder_weights: null
   
-  # Адаптер не нужен, так как у нас 1-канальный вход и нет предобучения
+  # The adapter is disabled as we are feeding a 1-channel input directly
+  # to a 1-channel compatible model (since encoder_weights is null).
   adapter:
     use: false
-
-# --- LOGGING ---
-# DEV: Можно добавить теги в MLflow для удобной фильтрации
-logging:
-  mlflow_tags:
-    experiment_type: "A_InDomain"
-    dataset: "isbi"
-    model_type: "M1_Baseline"
