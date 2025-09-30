@@ -6,7 +6,7 @@ from a Jupyter/Colab notebook environment.
 """
 import random
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any
 
 import matplotlib.pyplot as plt
 import tifffile as tiff
