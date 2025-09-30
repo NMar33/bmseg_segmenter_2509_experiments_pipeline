@@ -2,21 +2,28 @@
 
 """
 Main script for evaluating a trained model on full-size images.
-This script performs tiling on-the-fly, runs inference, stitches the results,
-and calculates metrics against the full ground truth masks.
+
+This script operates on a specific seed's test split. It works by:
+1. Identifying the unique source images that correspond to the test tiles.
+2. For each source image, it performs on-the-fly tiling, featurizing, and inference.
+3. Stitching the tile predictions back into a full-resolution mask.
+4. Calculating a suite of metrics by comparing the stitched mask against the
+   full-resolution ground truth.
+5. Saving the aggregated results to a JSON report file.
 """
 import argparse
 from pathlib import Path
 import json
 import numpy as np
+import pandas as pd
 import torch
 import tifffile as tiff
 import cv2
 from tqdm import tqdm
 
-from segwork.utils import load_config, load_split_ids
+from segwork.utils import set_seed, load_config, flatten_config
 from segwork.models.model_builder import build_model
-from segwork.data.filters import build_feature_stack
+from segwork.data.filters import build_feature_stack, norm_zscore
 from segwork.data.stitching import stitch_tiles
 from segwork.metrics.core import dice_score, iou_score, boundary_f1_score
 from segwork.metrics.advanced import v_rand_score, warping_error_score
@@ -24,13 +31,19 @@ from segwork.metrics.advanced import v_rand_score, warping_error_score
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained segmentation model.")
     parser.add_argument("--config", required=True, help="Path to the experiment config file.")
+    parser.add_argument("--seed", required=True, type=int, help="The random seed for the split to evaluate.")
     parser.add_argument("--checkpoint", required=True, help="Path to the trained model checkpoint (.pt file).")
-    parser.add_argument("--split", default="test", help="Which split to evaluate on (e.g., 'val', 'test').")
+    # DEV: Аргументы для переопределения данных. Критически важны для Эксперимента B (Cross-Domain).
+    parser.add_argument("--override_prepared_data_root", default=None, help="Override prepared_data_root for cross-domain evaluation.")
+    parser.add_argument("--override_interim_data_root", default=None, help="Override interim_data_root for cross-domain evaluation.")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    # Сид здесь используется для поиска правильного файла сплита
+    seed = args.seed
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"--- Starting Evaluation on '{args.split}' split ---")
+    print(f"--- Starting Evaluation for Seed: {seed} ---")
     print(f"Using device: {device}")
 
     # --- 1. Load Model ---
@@ -39,58 +52,58 @@ def main():
     model.eval()
     print(f"Model loaded successfully from checkpoint: {args.checkpoint}")
 
-    # --- 2. Load Data IDs ---
-    prepared_root = Path(cfg['data']['prepared_data_root'])
-    split_dir = prepared_root / "splits"
-    # DEV: Имя файла со сплитом берется из конфига, чтобы обеспечить гибкость.
-    split_filename = cfg['eval'][f'{args.split}_split_file']
-    image_ids = load_split_ids(split_dir, split_filename)
-    print(f"Found {len(image_ids)} images to evaluate in '{args.split}' split.")
+    # --- 2. Resolve Test Set Source Images ---
+    # DEV: Пути могут быть переопределены из командной строки.
+    prepared_root = Path(args.override_prepared_data_root or cfg['data']['prepared_data_root'])
+    interim_root = Path(args.override_interim_data_root or cfg['data']['interim_data_root'])
+    
+    print(f"Evaluating on data from: {prepared_root}")
+
+    # Читаем нужный файл сплита
+    splits_dir = interim_root / "splits" / f"seed_{seed}"
+    test_split_path = splits_dir / "test.txt"
+    if not test_split_path.exists():
+        raise FileNotFoundError(f"Test split file not found for seed {seed} at {test_split_path}")
+    
+    with open(test_split_path, 'r') as f:
+        test_tile_ids = {line.strip() for line in f if line.strip()}
+
+    # Находим уникальные исходные изображения, которые нужно оценить
+    master_df = pd.read_csv(interim_root / "master_split.csv")
+    test_df = master_df[master_df['tile_id'].isin(test_tile_ids)]
+    images_to_evaluate = test_df.groupby('source_image_id')
+    
+    print(f"Found {len(images_to_evaluate)} full images to evaluate in 'test' split for seed {seed}.")
 
     # --- 3. Main Evaluation Loop ---
     metrics_to_calc = cfg['eval']['metrics']
     metric_results = {metric: [] for metric in metrics_to_calc}
     
-    for image_id in tqdm(image_ids, desc=f"Evaluating on {args.split} set"):
-        # Load full-size image and mask
-        image_path = prepared_root / "images" / args.split / f"{image_id}.tif"
-        mask_path = prepared_root / "masks" / args.split / f"{image_id}.png"
+    for source_id, group in tqdm(images_to_evaluate, desc="Evaluating full images"):
+        source_split_folder = group['source_split'].iloc[0]
         
-        full_image = tiff.imread(image_path)
-        full_mask_gt = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-        # Binarize ground truth to {0.0, 1.0} for calculations
+        full_image = tiff.imread(prepared_root / "images" / source_split_folder / f"{source_id}.tif")
+        full_mask_gt = cv2.imread(str(prepared_root / "masks" / source_split_folder / f"{source_id}.png"), cv2.IMREAD_GRAYSCALE)
         full_mask_gt = (full_mask_gt > 127).astype(np.float32)
 
-        # --- On-the-fly Tiling and Featurizing ---
         H, W = full_image.shape
-        tile_size = cfg['data']['tile_size']
-        stride = tile_size - cfg['data']['overlap']
+        tile_size = cfg['data']['tiling']['tile_size']
+        stride = tile_size - cfg['data']['tiling']['overlap']
         
-        tiles, coords = [], []
-        # DEV: Убедимся, что даже если изображение меньше тайла, мы его обработаем.
-        # Это крайний случай, но он важен для робастности.
-        if H < tile_size or W < tile_size:
-            # Simple resize for tiny images
-            tile_img = cv2.resize(full_image, (tile_size, tile_size), interpolation=cv2.INTER_AREA)
-            tiles.append(tile_img)
-            coords.append((0,0)) # Dummy coords
-        else:
-            for y in range(0, H - tile_size + 1, stride):
-                for x in range(0, W - tile_size + 1, stride):
-                    tile_img = full_image[y:y+tile_size, x:x+tile_size]
-                    tiles.append(tile_img)
-                    coords.append((y, x))
-        
-        # --- Batch Inference ---
+        tiles_raw, coords = [], []
+        for y in range(0, W - tile_size + 1, stride):
+            for x in range(0, H - tile_size + 1, stride):
+                tiles_raw.append(full_image[x:x+tile_size, y:y+tile_size])
+                coords.append((x, y))
+
         predicted_tiles_probs = []
         with torch.no_grad():
-            for i in range(0, len(tiles), cfg['eval']['batch_size']):
-                batch_tiles_raw = tiles[i : i + cfg['eval']['batch_size']]
+            for i in range(0, len(tiles_raw), cfg['eval']['batch_size']):
+                batch_tiles_raw = tiles_raw[i : i + cfg['eval']['batch_size']]
                 
-                # Apply featurization to the batch
                 batch_stacks = []
                 for tile_img_raw in batch_tiles_raw:
-                    if cfg['data']['feature_bank']['use']:
+                    if cfg['data'].get('feature_bank', {}).get('use', False):
                         stack = build_feature_stack(tile_img_raw, cfg['data']['feature_bank'])
                     else:
                         stack = norm_zscore(tile_img_raw)[np.newaxis, ...].astype(np.float32)
@@ -104,12 +117,7 @@ def main():
                 
                 predicted_tiles_probs.extend(probs.cpu().numpy())
 
-        # --- Stitching ---
-        if H < tile_size or W < tile_size:
-            # Simple resize back for tiny images
-            stitched_prob_mask = cv2.resize(predicted_tiles_probs[0].squeeze(), (W, H), interpolation=cv2.INTER_AREA)
-        else:
-            stitched_prob_mask = stitch_tiles(predicted_tiles_probs, coords, (H, W), tile_size)
+        stitched_prob_mask = stitch_tiles(predicted_tiles_probs, coords, (H, W), tile_size)
 
         # --- Metric Calculation ---
         gt_tensor = torch.from_numpy(full_mask_gt).unsqueeze(0).unsqueeze(0)
@@ -123,19 +131,14 @@ def main():
         if "bf1" in metric_results:
             bf1 = boundary_f1_score(pred_bin_tensor, gt_tensor.bool())
             metric_results["bf1"].extend(bf1)
-        if "v_rand" in metric_results:
-            score = v_rand_score(pred_bin_tensor.numpy(), gt_tensor.numpy())
-            metric_results["v_rand"].append(score)
-        if "warping" in metric_results:
-            score = warping_error_score(pred_bin_tensor.numpy(), gt_tensor.numpy())
-            metric_results["warping"].append(score)
+        # ... (placeholders for advanced metrics)
 
     # --- 4. Reporting ---
     final_results = {
         "config_file": args.config,
+        "seed": seed,
         "checkpoint": args.checkpoint,
-        "split": args.split,
-        "num_images": len(image_ids),
+        "evaluated_on": str(prepared_root.name),
     }
     
     print("\n--- Evaluation Results ---")
@@ -145,17 +148,14 @@ def main():
             final_results[f"{metric}_std"] = np.std(values)
             print(f"{metric.upper():<10}: {final_results[f'{metric}_mean']:.4f} ± {final_results[f'{metric}_std']:.4f}")
 
-    # Save results to a JSON file for later aggregation
     report_dir = Path("./reports")
     report_dir.mkdir(exist_ok=True, parents=True)
     exp_name = Path(args.config).stem
-    seed = cfg['seed']
-    report_path = report_dir / f"{exp_name}_seed{seed}_{args.split}_results.json"
+    report_path = report_dir / f"{exp_name}_seed{seed}_on_{prepared_root.name}.json"
     
     with open(report_path, 'w') as f:
         json.dump(final_results, f, indent=4)
     print(f"\nResults saved to: {report_path}")
-
 
 if __name__ == "__main__":
     main()

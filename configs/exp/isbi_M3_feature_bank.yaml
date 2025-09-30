@@ -1,43 +1,62 @@
+# configs\exp\isbi_M3_feature_bank.yaml
+
 # ===============================================
 # EXPERIMENT: ISBI - In-Domain
 # MODEL M3: Feature Bank (Features -> Pre-trained)
 # ===============================================
 
+# --- Experiment Control ---
+# A list of random seeds this experiment will be run on.
+# The `run_experiment.py` orchestrator will iterate through this list.
+run_seeds: [42, 1337, 2023]
+
+# Custom tags to be logged in MLflow for easy filtering and organization.
+mlflow_tags:
+  experiment_type: "A_InDomain"
+  dataset: "isbi"
+  model_type: "M3_FeatureBank"
+
 # --- DATA ---
 data:
+  # Paths define the data source and where intermediate files will be stored.
   prepared_data_root: "../prepared_data/isbi2012_v1_raw"
-  # Отдельная папка для многоканальных тайлов
   interim_data_root: "./interim_data/isbi_M3_feature_bank"
   
-  # Включаем Feature Bank и выбираем каналы
+  # This section explicitly defines the splitting strategy for this experiment.
+  split_generation:
+    # DEV: The original ISBI dataset has a 'train' volume (30 slices) and a 'test'
+    # volume (30 slices). It does not have an official validation set.
+    # It is common practice to carve out a portion of the training set for validation.
+    # Here, we use 20% of the 'train' folder for validation, which corresponds to
+    # 6 slices, leaving 24 for training.
+    source_splits:
+      train: ["train"]
+      val: 0.20
+      test: ["test"]
+
+  # This section enables and configures the feature bank, which is the
+  # core component of the M3 model.
   feature_bank:
     use: true
     base_norm: zscore
     channels:
-      - raw          # Нормализованное сырое изображение
-      - clahe        # Улучшение локального контраста
-      - scharr       # Выделение градиентов/границ
-      - laplacian    # Выделение "острых" краев
-      - log_sigma1   # "Блобы" и края в масштабе sigma=1
-      - log_sigma2   # "Блобы" и края в масштабе sigma=2
-      # - frangi       # DEV: Фильтр Франги здесь может быть не так полезен,
-                       # так как мы ищем мембраны, а не сосуды. Оставим его для
-                       # датасетов с волокнами.
+      - raw          # Normalized raw image
+      - clahe        # Local contrast enhancement
+      - scharr       # Gradient/edge detection
+      - laplacian    # "Sharp" edge detection
+      - log_sigma1   # Blob/edge detection at scale sigma=1
+      - log_sigma2   # Blob/edge detection at scale sigma=2
 
 # --- MODEL ---
 model:
-  # Используем предобученные веса
+  # We use a pretrained encoder to leverage transfer learning.
   encoder_weights: "imagenet"
   
-  # Включаем адаптер. Он будет преобразовывать наши N каналов в 3
+  # The adapter is required to map our N-channel feature bank (6 channels in this case)
+  # to the 3 channels expected by the ImageNet-pretrained encoder.
   adapter:
     use: true
     out_channels: 3
+    # DEV: Freezing the encoder for a few epochs allows the adapter to learn a
+    # reasonable initial projection before the entire network is fine-tuned.
     freeze_encoder_epochs: 3
-
-# --- LOGGING ---
-logging:
-  mlflow_tags:
-    experiment_type: "A_InDomain"
-    dataset: "isbi"
-    model_type: "M3_FeatureBank"

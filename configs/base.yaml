@@ -1,24 +1,57 @@
 # configs/base.yaml
 
-# DEV: Это наш главный шаблон. Все экспериментальные конфиги будут
-# переопределять значения из этого файла. Здесь должны быть ВСЕ ключи.
+# ====================================================================
+# BASE CONFIGURATION
+# This file is the master template for all experiments.
+# Experimental configs (e.g., in `configs/exp/`) should inherit from
+# and override the values defined here.
+# ====================================================================
 
-seed: 42
+# A list of random seeds to run the experiment on.
+# The `run_experiment.py` orchestrator will iterate through this list,
+# creating a separate run for each seed.
+run_seeds: [42, 1337, 2023]
 
-# --- DATA ---
+# --- DATA CONFIGURATION ---
 data:
-  # Пути к данным. Будут переопределяться в каждом эксперименте.
-  prepared_data_root: "../prepared_data/isbi2012_v1_raw" # Пример
-  interim_data_root: "./interim_data/isbi2012_v1_raw"     # Пример
-  
-  # Параметры тайлинга
-  tile_size: 512
-  overlap: 64
+  # Paths to data directories. These MUST be overridden in experimental configs.
+  prepared_data_root: "../prepared_data/placeholder" # Path to the canonical dataset
+  interim_data_root: "./interim_data/placeholder"      # Path to store tiles and splits
 
-  # Параметры Feature Bank
+  # --- SPLIT GENERATION STRATEGY ---
+  # This section is the source of truth for how to create train/val/test splits.
+  # It is executed by the `generate-splits` script for each seed in `run_seeds`.
+  split_generation:
+    # `source_splits` defines which folders from `prepared_data_root` to use.
+    # The value for each key (`train`, `val`, `test`) can be:
+    #   - A list of strings: `["folder1", "folder2"]` -> Use images from these specific folders.
+    #   - A float: `0.15` -> Randomly sample this fraction from a source set.
+    source_splits:
+      # `train`: Required. List of folders for the initial training pool.
+      train: ["train"]
+
+      # `val`: Defines the validation set.
+      #   - If a list (e.g., `["val"]`), uses a fixed set from that folder.
+      #   - If a float (e.g., `0.15`), carves out a random fraction FROM THE `train` SET.
+      val: 0.15 
+
+      # `test`: Defines the test set.
+      #   - If a list (e.g., `["test"]`), uses a fixed set from that folder.
+      #   - If a float (e.g., `0.2`), carves out a random fraction.
+      #     THE SOURCE FOR CARVING IS ALWAYS THE VALIDATION SET (`val`).
+      #     This ensures the train set is touched as little as possible.
+      #     An error will be raised if `val` is not defined when `test` is a float.
+      test: ["test"]
+  
+  # Tiling parameters for `preprocess-tiles` script.
+  tiling:
+    tile_size: 512
+    overlap: 64
+  
+  # Feature Bank parameters for `preprocess-tiles` script.
   feature_bank:
-    use: false # По умолчанию выключено
-    base_norm: zscore # Нормализация базового изображения перед фильтрами
+    use: false
+    base_norm: zscore # "zscore" or "none"
     channels:
       - raw
       - clahe
@@ -26,37 +59,30 @@ data:
       - laplacian
       - log_sigma1
       - log_sigma2
+      - frangi
   
-  # Параметры сохранения промежуточных данных
   save_float16: true
 
-# --- MODEL ---
+# --- MODEL CONFIGURATION ---
 model:
   name: "unet"
   encoder: "timm-efficientnet-b3"
-  encoder_weights: "imagenet"
-  in_channels: 1 # Будет вычисляться автоматически, если `feature_bank.use: true`
+  encoder_weights: "imagenet" # `null` for training from scratch
   classes: 1
   
   adapter:
-    use: false # По умолчанию выключено
+    use: false
     out_channels: 3
     init: "xavier"
-    freeze_encoder_epochs: 5
+    freeze_encoder_epochs: 0
 
-# --- TRAINING ---
+# --- TRAINING CONFIGURATION ---
 train:
-  epochs: 50
+  epochs: 7
   batch_size: 8
   num_workers: 2
-  amp: true # Automatic Mixed Precision
+  amp: true
   
-  # Сплиты данных
-  splits:
-    train_file: "train.txt"
-    val_file: "val.txt"
-    # test_file будет использоваться в evaluate.py
-
   optimizer:
     name: "adamw"
     lr: 3.0e-4
@@ -66,25 +92,21 @@ train:
     name: "cosine"
     params: {}
 
-# --- LOSS ---
+# --- LOSS FUNCTION CONFIGURATION ---
 loss:
   name: "dice_bce"
   params:
     dice_weight: 0.5
     bce_weight: 0.5
-    pos_weight: 1.0 # Для BCEWithLogitsLoss
+    pos_weight: 1.0
 
-# --- EVALUATION ---
+# --- EVALUATION CONFIGURATION ---
 eval:
   batch_size: 16
-  test_split_file: "test.txt"
-  # Метрики, которые нужно посчитать
-  metrics: ["dice", "iou", "bf1", "assd", "v_rand", "warping"]
+  metrics: ["dice", "iou", "bf1"]
 
-# --- LOGGING ---
+# --- LOGGING CONFIGURATION ---
 logging:
-  # DEV: MLflow - отличный выбор для трекинга.
-  # Артефакты (модели, конфиги) будут храниться локально.
   backend: "mlflow"
   experiment_name: "domain_shift_segmentation"
-  artifact_uri: "./mlruns" # Путь для сохранения артефактов MLflow
+  artifact_uri: "./mlruns"

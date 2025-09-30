@@ -1,3 +1,5 @@
+# setup.py
+
 from setuptools import setup, find_packages
 from pathlib import Path
 
@@ -8,31 +10,23 @@ try:
     with open('requirements.txt', encoding="utf-8") as f:
         requirements = f.read().splitlines()
 except FileNotFoundError:
-    print("Warning: requirements.txt not found. Using a default list of dependencies.")
-    # DEV: Это запасной вариант на случай, если requirements.txt отсутствует.
-    requirements = [
-        "numpy", "pyyaml", "opencv-python-headless", "tqdm", "pandas",
-        "scikit-image", "scipy", "torch", "torchvision",
-        "segmentation-models-pytorch", "albumentations", "mlflow", "matplotlib"
-    ]
+    print("Warning: requirements.txt not found. Dependencies will not be installed.")
+    requirements = []
 
 # --- Setup Configuration ---
 setup(
     # The name of the package as it will be listed on PyPI or installed via pip.
-    # It's good practice for this to match the repository name.
     name="segmentation-workbench",
-    version="0.1.0",
+    version="0.2.0", # Bump version to reflect architectural changes
     description="A workbench for conducting segmentation experiments, focusing on domain shift and feature banks.",
-    author="<Your Name>", # <-- Replace with your name
-    author_email="<your.email@example.com>", # <-- and your email
-    url="<URL to your GitHub repo>", # <-- Add the URL to your project repo
+    author="<Your Name>",
+    author_email="<your.email@example.com>",
+    url="<URL to your GitHub repo>",
 
     # --- Package Discovery ---
-    # DEV: Это самая важная часть, исправленная согласно нашему обсуждению.
-    # Мы НЕ используем `package_dir`.
-    # `find_packages()` найдет один пакет верхнего уровня: `segwork`.
-    # Это гарантирует, что все импорты должны будут начинаться с `segwork.`,
-    # что предотвращает конфликты имен.
+    # `find_packages()` will automatically find the `segwork` package.
+    # This ensures that all imports must start with `from segwork. ...`,
+    # preventing naming conflicts.
     packages=find_packages(),
 
     # Dependencies that will be installed with the package.
@@ -40,17 +34,23 @@ setup(
 
     # --- Console Scripts ---
     # This creates command-line executables for our scripts.
-    # DEV: Имена команд с префиксом `segwork-` - это лучшая практика,
-    # чтобы избежать конфликтов с другими системными утилитами.
+    # Using a prefix like `segwork-` is a best practice to avoid conflicts.
     entry_points={
         'console_scripts': [
-            'segwork-preprocess = scripts.preprocess:main',
+            # Main experiment orchestrator
+            'segwork-run-experiment = scripts.run_experiment:main',
+            
+            # Individual pipeline steps
+            'segwork-preprocess-tiles = scripts.preprocess_tiles:main',
+            'segwork-generate-splits = scripts.generate_splits:main',
             'segwork-train = scripts.train:main',
             'segwork-evaluate = scripts.evaluate:main',
-            'segwork-visualize = scripts.visualize_filters:main',
-            'segwork-explore = scripts.explore_dataset:main', # Assuming you add this
-            'segwork-run-exp = scripts.run_experiment:main',
-            'segwork-make-report = scripts.make_reports:main',
+
+            # Reporting and analysis
+            'segwork-make-reports = scripts.make_reports:main',
+            
+            # Visualization tools (assuming they exist)
+            'segwork-visualize-filters = scripts.visualize_filters:main',
         ],
     },
 
@@ -60,7 +60,7 @@ setup(
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: MIT License", # Example, choose your own license
+        "License :: OSI Approved :: MIT License", # Example, choose your license
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.9",

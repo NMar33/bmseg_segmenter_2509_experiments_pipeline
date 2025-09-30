@@ -1,4 +1,6 @@
-# --- Core Data & IO ---
+# requirements.txt
+
+# --- Core Libraries ---
 numpy
 pyyaml
 opencv-python-headless
@@ -6,17 +8,17 @@ imageio
 tifffile
 tqdm
 pandas
+scikit-image
+scipy # Often a dependency for scikit-image, good to have it explicitly
 
-# --- ML & Segmentation ---
-# DEV: Указываем версии для воспроизводимости. Можно убрать, если не критично.
+# --- Machine Learning ---
+# Using specific versions is good for reproducibility.
+# Update them as needed for your environment.
 torch>=1.13
 torchvision
 segmentation-models-pytorch==0.3.3
 albumentations>=1.3.0
-scikit-image
 
-# --- Experiment Tracking ---
+# --- Experiment Tracking & Visualization ---
 mlflow>=2.0
-
-# --- Visualization (Optional but recommended) ---
 matplotlib
