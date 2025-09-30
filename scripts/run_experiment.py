@@ -9,18 +9,17 @@ This script manages the entire lifecycle of an experiment defined by a template 
 3. Iterates through a list of seeds defined in the config. For each seed:
     a. Generates the specific data splits (`generate-splits`).
     b. Trains the model (`train`).
-    c. Finds the best checkpoint from the training run.
-    d. Evaluates the model on the test set (`evaluate`).
-4. It is resumable: it tracks completed steps in a `progress.json` file and
-   skips them on subsequent runs.
+    c. Finds the run ID and best checkpoint from the training run.
+    d. Evaluates the model (`evaluate`), logging results back to the original MLflow run.
+4. It is resumable: it tracks completed steps in a `progress.json` file.
 """
 import argparse
 import subprocess
 from pathlib import Path
 import json
 import mlflow
+from typing import Tuple
 
-# DEV: Используем наш кастомный `load_config` из `segwork`
 from segwork.utils import load_config
 
 def run_command(command: str):
@@ -34,8 +33,10 @@ def run_command(command: str):
         print(f"\n[FATAL ERROR] Command failed with exit code {e.returncode}")
         raise e
 
-def find_best_checkpoint(mlflow_client, experiment_id, run_name) -> str | None:
-    """Finds the path to the best checkpoint artifact for a given MLflow run."""
+def find_mlflow_run(mlflow_client, experiment_id, run_name) -> Tuple[str | None, str | None]:
+    """
+    Finds the latest MLflow run by name and returns its ID and best checkpoint path.
+    """
     runs = mlflow_client.search_runs(
         experiment_ids=[experiment_id],
         filter_string=f"tags.mlflow.runName = '{run_name}'",
@@ -44,18 +45,17 @@ def find_best_checkpoint(mlflow_client, experiment_id, run_name) -> str | None:
     )
     if not runs:
         print(f"Warning: Could not find MLflow run with name '{run_name}'")
-        return None
+        return None, None
     
     run_id = runs[0].info.run_id
     artifacts = mlflow_client.list_artifacts(run_id, "checkpoints")
     if not artifacts:
         print(f"Warning: No checkpoints found in run '{run_id}'")
-        return None
+        return run_id, None
     
     artifact_path = artifacts[0].path
-    # DEV: Скачиваем артефакт во временную директорию. MLflow сам управляет путем.
     local_path = mlflow_client.download_artifacts(run_id, artifact_path)
-    return local_path
+    return run_id, local_path
 
 def main():
     parser = argparse.ArgumentParser(description="Run a full experiment suite from a template config.")
@@ -67,7 +67,6 @@ def main():
     
     mlflow.set_tracking_uri(f"file://{Path(cfg['logging']['artifact_uri']).resolve()}")
     
-    # Ensure the experiment exists in MLflow to get its artifact location
     experiment_name = cfg['logging']['experiment_name']
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
@@ -75,13 +74,7 @@ def main():
         mlflow.create_experiment(experiment_name)
         experiment = mlflow.get_experiment_by_name(experiment_name)
     
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-    # `experiment.artifact_location` возвращает URI вида 'file:///path/to/artifacts'
-    # Мы преобразуем его в объект Path, который корректно работает с файловой системой.
     artifact_path = Path(experiment.artifact_location.replace("file://", ""))
-    
-    # Явно создаем директорию артефактов эксперимента, если она еще не существует.
-    # Это решает проблему `FileNotFoundError`, если MLflow не успел создать папку.
     artifact_path.mkdir(parents=True, exist_ok=True)
     
     progress_file = artifact_path / "progress.json"
@@ -137,17 +130,24 @@ def main():
             with open(progress_file, 'w') as f: json.dump(progress, f, indent=4)
             
             run_name = f"{Path(args.config).stem}_seed{seed}"
-            checkpoint_path = find_best_checkpoint(mlflow.tracking.MlflowClient(), experiment.experiment_id, run_name)
+            # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Находим и ID, и чекпоинт ---
+            run_id, checkpoint_path = find_mlflow_run(mlflow.tracking.MlflowClient(), experiment.experiment_id, run_name)
             
-            if checkpoint_path:
-                run_command(f"segwork-evaluate --config {args.config} --seed {seed} --checkpoint {checkpoint_path}")
+            if checkpoint_path and run_id:
+                # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Передаем `mlflow_run_id` в `evaluate` ---
+                eval_command = (
+                    f"segwork-evaluate --config {args.config} --seed {seed} "
+                    f"--checkpoint {checkpoint_path} --mlflow_run_id {run_id}"
+                )
+                run_command(eval_command)
                 progress[run_key]["evaluation_completed"] = True
             else:
-                print(f"[ERROR] Could not find checkpoint for run '{run_name}'. Skipping evaluation.")
-                progress[run_key]["status"] = "error_no_checkpoint"
+                error_msg = "Could not find checkpoint" if not checkpoint_path else "Could not find run_id"
+                print(f"[ERROR] {error_msg} for run '{run_name}'. Skipping evaluation.")
+                progress[run_key]["status"] = "error_evaluation_failed"
         
         # --- 3.4 Finalize ---
-        if progress.get(run_key, {}).get("status") != "error_no_checkpoint":
+        if "error" not in progress.get(run_key, {}).get("status", ""):
             progress[run_key]["status"] = "completed"
         with open(progress_file, 'w') as f:
             json.dump(progress, f, indent=4)

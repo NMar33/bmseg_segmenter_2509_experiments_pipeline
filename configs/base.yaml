@@ -106,6 +106,36 @@ loss:
 eval:
   batch_size: 16
   metrics: ["dice", "iou", "bf1"]
+  
+  # --- NEW: ADVANCED VISUALIZATION SECTION ---
+  visualization:
+    enabled: true  # Master switch to enable/disable all visualization generation.
+    
+    # --- Selection Strategy ---
+    # Selects which images from the test set to visualize.
+    primary_metric: "dice" # Metric used to sort for 'best' and 'worst'.
+    num_best: 1            # Number of samples with the highest metric score to visualize.
+    num_worst: 1           # Number of samples with the lowest metric score to visualize.
+    num_random: 1          # Number of random samples for an unbiased view.
+
+    # --- Feature Bank Visualization ---
+    # If true, for each selected image, an additional plot showing all
+    # input filter channels will be generated. This is only active if
+    # the model was trained with `feature_bank.use: true`.
+    visualize_feature_bank: true
+
+    # --- Styling for Visualization Plots ---
+    style:
+      figsize_per_panel: [6, 6] # (width, height) for each panel in the grid
+      dpi: 150
+      title_fontsize: 12
+      # Colormap for filter visualizations (if visualize_feature_bank is true)
+      colormap: "viridis" 
+      # Overlay settings for the main comparison plot
+      overlay_alpha: 0.4
+      # Colors are in RGB format
+      gt_color_rgb: [0, 255, 0]      # Green for Ground Truth
+      pred_color_rgb: [227, 27, 27] # Red for Prediction
 
 # --- LOGGING CONFIGURATION ---
 logging:

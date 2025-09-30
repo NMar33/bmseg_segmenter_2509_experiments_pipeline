@@ -20,7 +20,8 @@ from segwork.visualization.plotter import Plotter
 from segwork.visualization.generators import (
     generate_raw_panel,
     generate_overlay_panel,
-    generate_filter_panel
+    generate_filter_panel,
+    _normalize_to_uint8  
 )
 
 def explore_random_samples(
@@ -190,3 +191,105 @@ def visualize_filters_for_image(config: dict):
 
     # `show=True` теперь будет работать, так как мы в сессии ноутбука
     plotter.render(save_path=save_path, show=output_cfg.get('show_interactive', True))
+
+
+def generate_evaluation_visuals(
+    image: np.ndarray,
+    gt_mask: np.ndarray,
+    pred_mask: np.ndarray,
+    feature_bank_config: Dict[str, Any],
+    viz_config: Dict[str, Any],
+    output_dir: Path,
+    image_id: str,
+    metric_value: float | None = None
+):
+    """
+    Generates and saves a suite of visualizations for a single evaluation sample.
+
+    This function creates two main plots:
+    1. A comparison panel: [Input | Ground Truth | Prediction | Overlay]
+    2. An optional feature bank panel showing all filter responses for the input image.
+
+    Args:
+        image: The original full-resolution source image (H, W).
+        gt_mask: The ground truth mask (H, W).
+        pred_mask: The binary prediction mask (H, W).
+        feature_bank_config: The `data.feature_bank` section from the config.
+        viz_config: The `eval.visualization` section from the config.
+        output_dir: The directory where the visualization PNGs will be saved.
+        image_id: The unique ID of the image, used for naming output files.
+        metric_value: The value of the primary metric for this image, to be shown in the title.
+    """
+    viz_style = viz_config.get('style', {})
+    primary_metric_name = viz_config.get('primary_metric', 'dice').upper()
+    metric_str = f"{primary_metric_name}={metric_value:.3f}" if metric_value is not None else ""
+
+    # --- 1. Generate and save the main comparison panel ---
+    try:
+        comparison_plotter = Plotter(viz_style)
+        
+        comparison_plotter.add_panel(generate_raw_panel(image), f"Input: {image_id}")
+        
+        gt_overlay_color = viz_style.get('gt_color_rgb', [0, 255, 0])
+        comparison_plotter.add_panel(generate_overlay_panel(image, gt_mask, color=gt_overlay_color), "Ground Truth")
+
+        pred_overlay_color = viz_style.get('pred_color_rgb', [227, 27, 27])
+        comparison_plotter.add_panel(generate_overlay_panel(image, pred_mask, color=pred_overlay_color), f"Prediction\n{metric_str}")
+        
+        overlay_img = generate_overlay_panel(image, pred_mask, color=pred_overlay_color, alpha=viz_style.get('overlay_alpha', 0.4))
+        comparison_plotter.add_panel(overlay_img, "Overlay")
+
+        comparison_plotter.render(
+            save_path=output_dir / f"{image_id}_comparison.png",
+            show=False
+        )
+    except Exception as e:
+        print(f"\n[Warning] Failed to generate comparison panel for '{image_id}'. Error: {e}")
+
+    # --- 2. (Optional) Generate and save the feature bank panel ---
+    if viz_config.get('visualize_feature_bank', False) and feature_bank_config.get('use', False):
+        try:
+            fb_plotter = Plotter(viz_style)
+            
+            channels = feature_bank_config.get('channels', ['raw'])
+            
+            # DEV: Мы вызываем отдельные функции фильтров "на лету",
+            # чтобы не зависеть от `build_feature_stack` и его нормализации.
+            # Это дает нам больше контроля над визуализацией.
+            
+            # Нормализуем входное изображение до uint8 для фильтров, которые этого ожидают
+            img_u8 = _normalize_to_uint8(image)
+            
+            for channel_name in channels:
+                try:
+                    title = channel_name.capitalize()
+                    filtered_img = None
+                    
+                    if channel_name == 'raw':
+                        filtered_img = image # Показываем исходное изображение без z-score
+                    elif channel_name == 'clahe':
+                        filtered_img = filter_functions.apply_clahe(img_u8)
+                    elif channel_name == 'scharr':
+                        filtered_img = filter_functions.scharr_mag(img_u8)
+                    elif channel_name == 'laplacian':
+                        filtered_img = filter_functions.laplacian(img_u8)
+                    elif channel_name.startswith("log_sigma"):
+                        sigma = float(channel_name.replace("log_sigma", ""))
+                        title = f"LoG (σ={sigma})"
+                        filtered_img = filter_functions.log_filter(img_u8, sigma)
+                    elif channel_name == 'frangi':
+                        filtered_img = filter_functions.frangi_filter(image)
+                    
+                    if filtered_img is not None:
+                        panel = generate_filter_panel(filtered_img, viz_style.get('colormap', 'viridis'))
+                        fb_plotter.add_panel(panel, title)
+                except Exception as e:
+                    print(f"Warning: Could not apply filter '{channel_name}' for visualization. Error: {e}")
+
+            if fb_plotter.panels:
+                fb_plotter.render(
+                    save_path=output_dir / f"{image_id}_feature_bank.png",
+                    show=False
+                )
+        except Exception as e:
+            print(f"\n[Warning] Failed to generate feature bank panel for '{image_id}'. Error: {e}")
