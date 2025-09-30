@@ -32,17 +32,24 @@ class Plotter:
             image_data: The image to display (expected in BGR format from generators).
             title: The title for this subplot.
         """
-        # DEV: Мы ожидаем BGR, так как это стандарт для OpenCV, но Matplotlib
-        # ожидает RGB. Конвертация будет сделана в `render`.
         self.panels.append((image_data, title))
 
-    def render(self, save_path: Path | None = None, show: bool = False):
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавлены новые аргументы `suptitle` и `force_cols` ---
+    def render(
+        self,
+        save_path: Path | None = None,
+        show: bool = False,
+        suptitle: str | None = None,
+        force_cols: int | None = None
+    ):
         """
         Renders the final grid plot from all added panels.
 
         Args:
             save_path: If provided, the plot will be saved to this file path.
             show: If True, `plt.show()` will be called for interactive display.
+            suptitle: If provided, adds a main title to the entire figure.
+            force_cols: If provided, forces a specific number of columns for the grid layout.
         """
         if not self.panels:
             print("Warning: No panels to plot.")
@@ -50,21 +57,20 @@ class Plotter:
 
         num_panels = len(self.panels)
         
-        # --- Automatically calculate the grid layout ---
-        # DEV: Простая эвристика, чтобы сетка была более-менее квадратной.
-        # Предпочитаем больше строк, чем колонок для лучшей читаемости.
-        cols_config = self.style.get("cols")
-        if cols_config:
-            cols = int(cols_config)
-        else:
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Логика определения количества колонок ---
+        # Теперь `force_cols` (или `cols` из `style_config`) имеет высший приоритет.
+        # Автоматический расчет используется только как запасной вариант.
+        if force_cols:
+            cols = force_cols
+        elif self.style.get("cols"):
+            cols = int(self.style.get("cols"))
+        else: # Automatic calculation
             cols = math.ceil(math.sqrt(num_panels))
-            # Limit max columns for better readability on standard screens
             if num_panels > 4:
                 cols = min(4, cols)
         
         rows = math.ceil(num_panels / cols)
 
-        # Calculate figure size based on the number of panels and desired size per panel
         figsize_per_panel = self.style.get("figsize_per_panel", (6, 6))
         fig_width = cols * figsize_per_panel[0]
         fig_height = rows * figsize_per_panel[1]
@@ -74,16 +80,19 @@ class Plotter:
 
         for i, (panel_data, title) in enumerate(self.panels):
             ax = axes[i]
-            # Convert BGR (from OpenCV/generators) to RGB (for Matplotlib)
             ax.imshow(cv2.cvtColor(panel_data, cv2.COLOR_BGR2RGB))
             ax.set_title(title, fontsize=self.style.get("title_fontsize", 12))
             ax.axis('off')
 
-        # Hide any unused subplots in the grid
         for j in range(num_panels, len(axes)):
             axes[j].axis('off')
 
-        fig.tight_layout(pad=1.5)
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавление главного заголовка ---
+        if suptitle:
+            fig.suptitle(suptitle, fontsize=self.style.get("suptitle_fontsize", 16))
+        
+        # `tight_layout` может конфликтовать с `suptitle`, вызываем его до
+        fig.tight_layout(pad=1.5, rect=[0, 0, 1, 0.95] if suptitle else None)
 
         if save_path:
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,5 +102,4 @@ class Plotter:
         if show:
             plt.show()
         
-        # Close the figure to free up memory, crucial for running in loops or notebooks
         plt.close(fig)

@@ -64,39 +64,49 @@ def main():
 
     # --- 1. Initialization ---
     cfg = load_config(args.config)
-    
+
     mlflow.set_tracking_uri(f"file://{Path(cfg['logging']['artifact_uri']).resolve()}")
-    
+
     experiment_name = cfg['logging']['experiment_name']
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
         print(f"Creating new MLflow experiment: '{experiment_name}'")
         mlflow.create_experiment(experiment_name)
         experiment = mlflow.get_experiment_by_name(experiment_name)
-    
+
     artifact_path = Path(experiment.artifact_location.replace("file://", ""))
     artifact_path.mkdir(parents=True, exist_ok=True)
-    
-    progress_file = artifact_path / "progress.json"
+
+    # --- НОВАЯ ЛОГИКА ИМЕНОВАНИЯ ФАЙЛА ПРОГРЕССА ---
+    # Имя файла прогресса теперь уникально для каждого шаблона конфига.
+    config_stem = Path(args.config).stem
+    progress_filename = f"progress_{config_stem}.json"
+    progress_file = artifact_path / progress_filename
     progress = {}
+
     if progress_file.exists():
         try:
             with open(progress_file, 'r') as f:
                 progress = json.load(f)
-            print(f"Resuming experiment, progress loaded from: {progress_file}")
+            print(f"Resuming experiment '{config_stem}', progress loaded from: {progress_file}")
         except json.JSONDecodeError:
-            print(f"Warning: Could not read progress file at {progress_file}. Starting fresh.")
-    
+            print(f"Warning: Could not read progress file at {progress_file}. Starting fresh for '{config_stem}'.")
+                
     # --- 2. Heavy Preprocessing (Tiles) ---
-    if not progress.get("preprocess_tiles_completed", False):
+    # DEV: Ключ для отслеживания `preprocess-tiles` теперь тоже уникален,
+    # он зависит от `interim_data_root`, так как разные модели могут
+    # требовать разные feature banks (и, следовательно, разные interim-папки).
+    preprocess_key = f"preprocess_tiles_{Path(cfg['data']['interim_data_root']).name}"
+
+    if not progress.get(preprocess_key, False):
         print("\n--- Running Step 1: Preprocessing Tiles ---")
         run_command(f"segwork-preprocess-tiles --config {args.config}")
-        progress["preprocess_tiles_completed"] = True
+        progress[preprocess_key] = True
         with open(progress_file, 'w') as f:
             json.dump(progress, f, indent=4)
     else:
         print("\n--- Skipping Step 1: Preprocessing Tiles (already completed) ---")
-
+  
     # --- 3. Loop Through Seeds ---
     seeds = cfg.get('run_seeds', [cfg.get('seed')])
     

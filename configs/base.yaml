@@ -102,40 +102,90 @@ loss:
     bce_weight: 0.5
     pos_weight: 1.0
 
+# # --- EVALUATION CONFIGURATION ---
+# eval:
+#   batch_size: 16
+#   metrics: ["dice", "iou", "bf1"]
+  
+#   # --- NEW: ADVANCED VISUALIZATION SECTION ---
+#   visualization:
+#     enabled: true  # Master switch to enable/disable all visualization generation.
+    
+#     # --- Selection Strategy ---
+#     # Selects which images from the test set to visualize.
+#     primary_metric: "dice" # Metric used to sort for 'best' and 'worst'.
+#     num_best: 1            # Number of samples with the highest metric score to visualize.
+#     num_worst: 1           # Number of samples with the lowest metric score to visualize.
+#     num_random: 1          # Number of random samples for an unbiased view.
+
+#     # --- Feature Bank Visualization ---
+#     # If true, for each selected image, an additional plot showing all
+#     # input filter channels will be generated. This is only active if
+#     # the model was trained with `feature_bank.use: true`.
+#     visualize_feature_bank: true
+
+#     # --- Styling for Visualization Plots ---
+#     style:
+#       figsize_per_panel: [6, 6] # (width, height) for each panel in the grid
+#       dpi: 150
+#       title_fontsize: 12
+#       # Colormap for filter visualizations (if visualize_feature_bank is true)
+#       colormap: "viridis" 
+#       # Overlay settings for the main comparison plot
+#       overlay_alpha: 0.4
+#       # Colors are in RGB format
+#       gt_color_rgb: [0, 255, 0]      # Green for Ground Truth
+#       pred_color_rgb: [227, 27, 27] # Red for Prediction
+
 # --- EVALUATION CONFIGURATION ---
 eval:
   batch_size: 16
   metrics: ["dice", "iou", "bf1"]
   
-  # --- NEW: ADVANCED VISUALIZATION SECTION ---
   visualization:
-    enabled: true  # Master switch to enable/disable all visualization generation.
+    enabled: true
     
     # --- Selection Strategy ---
-    # Selects which images from the test set to visualize.
-    primary_metric: "dice" # Metric used to sort for 'best' and 'worst'.
-    num_best: 1            # Number of samples with the highest metric score to visualize.
-    num_worst: 1           # Number of samples with the lowest metric score to visualize.
-    num_random: 1          # Number of random samples for an unbiased view.
+    primary_metric: "dice"
+    num_best: 1
+    num_worst: 1
+    num_random: 1
 
     # --- Feature Bank Visualization ---
-    # If true, for each selected image, an additional plot showing all
-    # input filter channels will be generated. This is only active if
-    # the model was trained with `feature_bank.use: true`.
     visualize_feature_bank: true
 
     # --- Styling for Visualization Plots ---
     style:
-      figsize_per_panel: [6, 6] # (width, height) for each panel in the grid
-      dpi: 150
+      # General plot settings
+      suptitle_fontsize: 16
       title_fontsize: 12
-      # Colormap for filter visualizations (if visualize_feature_bank is true)
-      colormap: "viridis" 
-      # Overlay settings for the main comparison plot
+      dpi: 150
+      
+      # Layout settings
+      # For the main comparison plot, we'll use a 2x3 grid.
+      comparison_layout_cols: 3
+      figsize_per_panel: [6, 6] # (width, height) for each panel in the grid
+      
+      # Colormap for filter visualizations and heatmaps
+      colormap: "viridis"
+      
+      # Colors are in RGB format [R, G, B]
+      # --- Overlay settings ---
       overlay_alpha: 0.4
-      # Colors are in RGB format
-      gt_color_rgb: [0, 255, 0]      # Green for Ground Truth
-      pred_color_rgb: [227, 27, 27] # Red for Prediction
+      gt_overlay_color_rgb: [0, 170, 0]   # Darker Green for Ground Truth
+      pred_overlay_color_rgb: [227, 27, 27] # Red for Prediction
+      
+      # --- Error Map Colors ---
+      error_map_tp_color_rgb: [80, 80, 80]     # Gray for True Positive (correctly found)
+      error_map_fp_color_rgb: [255, 0, 0]     # Red for False Positive (hallucination)
+      error_map_fn_color_rgb: [0, 0, 255]     # Blue for False Negative (missed object)
+      
+      # --- Info Panel Settings ---
+      info_panel_bg_color_rgb: [20, 20, 20] # Dark background
+      info_panel_font_color_bgr: [255, 255, 255] # White font (in BGR for OpenCV)
+      info_panel_font_scale: 0.8
+      info_panel_font_thickness: 1
+
 
 # --- LOGGING CONFIGURATION ---
 logging:

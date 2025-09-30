@@ -162,60 +162,80 @@ def main():
         # --- 4.1 Log Aggregated Metrics to MLflow ---
         print("\n--- Aggregated Evaluation Results ---")
         metrics_to_log = {}
+        # Собираем метрики из DataFrame, чтобы избежать повторных вычислений
         for metric_col in df_results.columns:
             if metric_col == 'image_id': continue
             values = df_results[metric_col]
             if not values.empty:
                 mean_val, std_val = values.mean(), values.std()
+                # Логируем в MLflow с префиксом 'test/', как в train.py
                 metrics_to_log[f"test/{metric_col}_mean"] = mean_val
                 metrics_to_log[f"test/{metric_col}_std"] = std_val
                 print(f"test_{metric_col.upper():<10}: {mean_val:.4f} ± {std_val:.4f}")
-        mlflow.log_metrics(metrics_to_log)
+        
+        # Записываем все метрики в MLflow одним вызовом
+        if metrics_to_log:
+            mlflow.log_metrics(metrics_to_log)
         
         # --- 4.2 Generate and Log Visualizations to MLflow ---
         if viz_cfg.get('enabled', False) and not df_results.empty:
             primary_metric = viz_cfg.get('primary_metric', 'dice')
-            df_results = df_results.sort_values(by=primary_metric, ascending=True)
-            
-            ids_to_visualize = set()
-            ids_to_visualize.update(df_results.head(viz_cfg.get('num_worst', 0))['image_id'])
-            ids_to_visualize.update(df_results.tail(viz_cfg.get('num_best', 0))['image_id'])
-            
-            remaining_ids = list(set(df_results['image_id']) - ids_to_visualize)
-            num_random = min(viz_cfg.get('num_random', 0), len(remaining_ids))
-            if num_random > 0:
-                ids_to_visualize.update(random.sample(remaining_ids, num_random))
+            if primary_metric not in df_results.columns:
+                print(f"Warning: Primary metric '{primary_metric}' for visualization not found in results. Skipping visualization.")
+            else:
+                df_results = df_results.sort_values(by=primary_metric, ascending=True)
+                
+                # --- Логика выбора ID для визуализации ---
+                worst_ids = df_results.head(viz_cfg.get('num_worst', 0))
+                best_ids = df_results.tail(viz_cfg.get('num_best', 0))
+                
+                remaining_df = df_results.drop(index=worst_ids.index).drop(index=best_ids.index)
+                num_random = min(viz_cfg.get('num_random', 0), len(remaining_df))
+                random_ids = remaining_df.sample(n=num_random, random_state=seed) if num_random > 0 else pd.DataFrame()
 
-            print(f"\nSelected {len(ids_to_visualize)} images for visualization (best, worst, random)...")
+                # Собираем все в один DataFrame для итерации
+                samples_to_visualize = pd.concat([
+                    worst_ids.assign(type='Worst'),
+                    best_ids.assign(type='Best'),
+                    random_ids.assign(type='Random')
+                ])
 
-            # Create a temporary local directory for visualization artifacts
-            temp_viz_dir = Path("./temp_visuals_for_mlflow")
-            if temp_viz_dir.exists(): shutil.rmtree(temp_viz_dir)
-            temp_viz_dir.mkdir()
-            
-            for source_id in tqdm(list(ids_to_visualize), desc="Pass 2/2: Generating Visuals"):
-                source_split_folder = master_df[master_df['source_image_id'] == source_id]['source_split'].iloc[0]
-                full_image = tiff.imread(prepared_root / "images" / source_split_folder / f"{source_id}.tif")
-                full_mask_gt = cv2.imread(str(prepared_root / "masks" / source_split_folder / f"{source_id}.png"), cv2.IMREAD_GRAYSCALE)
-                pred_prob_mask = tiff.imread(temp_preds_dir / f"{source_id}_pred.tif")
-                metric_value = df_results[df_results['image_id'] == source_id][primary_metric].iloc[0]
+                print(f"\nSelected {len(samples_to_visualize)} images for visualization (best, worst, random)...")
 
-                generate_evaluation_visuals(
-                    image=full_image,
-                    gt_mask=full_mask_gt,
-                    pred_mask=(pred_prob_mask > 0.5),
-                    feature_bank_config=cfg['data'].get('feature_bank', {}),
-                    viz_config=viz_cfg,
-                    output_dir=temp_viz_dir,
-                    image_id=source_id,
-                    metric_value=metric_value
-                )
-            
-            print(f"Logging {len(list(temp_viz_dir.glob('*.png')))} visualization artifacts to MLflow...")
-            mlflow.log_artifacts(str(temp_viz_dir), artifact_path="evaluation_visuals")
-            shutil.rmtree(temp_viz_dir)
+                temp_viz_dir = Path("./temp_visuals_for_mlflow")
+                if temp_viz_dir.exists(): shutil.rmtree(temp_viz_dir)
+                temp_viz_dir.mkdir()
+                
+                for _, row in tqdm(samples_to_visualize.iterrows(), total=len(samples_to_visualize), desc="Pass 2/2: Generating Visuals"):
+                    source_id = row['image_id']
+                    
+                    source_split_folder = master_df[master_df['source_image_id'] == source_id]['source_split'].iloc[0]
+                    full_image = tiff.imread(prepared_root / "images" / source_split_folder / f"{source_id}.tif")
+                    full_mask_gt = cv2.imread(str(prepared_root / "masks" / source_split_folder / f"{source_id}.png"), cv2.IMREAD_GRAYSCALE)
+                    pred_prob_mask = tiff.imread(temp_preds_dir / f"{source_id}_pred.tif")
+                    
+                    # Собираем все метрики для этого изображения в один словарь
+                    image_metrics = row.to_dict()
+
+                    generate_evaluation_visuals(
+                        image=full_image,
+                        gt_mask=full_mask_gt,
+                        pred_mask=(pred_prob_mask > 0.5),
+                        metrics=image_metrics, # Передаем весь словарь
+                        feature_bank_config=cfg['data'].get('feature_bank', {}),
+                        viz_config=viz_cfg,
+                        output_dir=temp_viz_dir,
+                        image_id=source_id,
+                        sample_type=row['type'] # Передаем тип сэмпла
+                    )
+                
+                print(f"Logging {len(list(temp_viz_dir.glob('*.png')))} visualization artifacts to MLflow...")
+                mlflow.log_artifacts(str(temp_viz_dir), artifact_path="evaluation_visuals")
+                shutil.rmtree(temp_viz_dir)
 
         # --- 4.3 Log Per-Image Results CSV to MLflow ---
+        # DEV: Сохраняем детальные результаты по каждому изображению как артефакт.
+        # Это очень полезно для последующего глубокого анализа.
         report_path = Path("./temp_per_image_results.csv")
         df_results.to_csv(report_path, index=False)
         mlflow.log_artifact(str(report_path), artifact_path="reports")
@@ -226,6 +246,3 @@ def main():
             shutil.rmtree(temp_preds_dir)
 
     print("\n✅ Evaluation finished. All results logged to MLflow.")
-
-if __name__ == "__main__":
-    main()

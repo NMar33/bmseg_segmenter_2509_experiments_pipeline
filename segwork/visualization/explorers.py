@@ -21,7 +21,10 @@ from segwork.visualization.generators import (
     generate_raw_panel,
     generate_overlay_panel,
     generate_filter_panel,
-    _normalize_to_uint8  
+    generate_mask_panel,       
+    generate_error_map_panel,  
+    generate_info_panel,     
+    _normalize_to_uint8        
 )
 
 def explore_random_samples(
@@ -197,50 +200,54 @@ def generate_evaluation_visuals(
     image: np.ndarray,
     gt_mask: np.ndarray,
     pred_mask: np.ndarray,
+    metrics: Dict[str, Any],
     feature_bank_config: Dict[str, Any],
     viz_config: Dict[str, Any],
     output_dir: Path,
     image_id: str,
-    metric_value: float | None = None
+    sample_type: str
 ):
     """
     Generates and saves a suite of visualizations for a single evaluation sample.
-
-    This function creates two main plots:
-    1. A comparison panel: [Input | Ground Truth | Prediction | Overlay]
-    2. An optional feature bank panel showing all filter responses for the input image.
-
-    Args:
-        image: The original full-resolution source image (H, W).
-        gt_mask: The ground truth mask (H, W).
-        pred_mask: The binary prediction mask (H, W).
-        feature_bank_config: The `data.feature_bank` section from the config.
-        viz_config: The `eval.visualization` section from the config.
-        output_dir: The directory where the visualization PNGs will be saved.
-        image_id: The unique ID of the image, used for naming output files.
-        metric_value: The value of the primary metric for this image, to be shown in the title.
     """
     viz_style = viz_config.get('style', {})
-    primary_metric_name = viz_config.get('primary_metric', 'dice').upper()
-    metric_str = f"{primary_metric_name}={metric_value:.3f}" if metric_value is not None else ""
 
-    # --- 1. Generate and save the main comparison panel ---
+    # --- 1. Generate and save the main 2x3 comparison panel ---
     try:
-        comparison_plotter = Plotter(viz_style)
+        plotter = Plotter(viz_style)
         
-        comparison_plotter.add_panel(generate_raw_panel(image), f"Input: {image_id}")
+        # --- Row 1 ---
+        # Panel 1: Info
+        info_metrics = metrics.copy()
+        info_metrics['type'] = sample_type.capitalize() # e.g., "Worst", "Best"
+        plotter.add_panel(generate_info_panel(image.shape, info_metrics, viz_style), "") # No title for info panel
         
-        gt_overlay_color = viz_style.get('gt_color_rgb', [0, 255, 0])
-        comparison_plotter.add_panel(generate_overlay_panel(image, gt_mask, color=gt_overlay_color), "Ground Truth")
+        # Panel 2: Input Image
+        plotter.add_panel(generate_raw_panel(image), "Input Image")
 
-        pred_overlay_color = viz_style.get('pred_color_rgb', [227, 27, 27])
-        comparison_plotter.add_panel(generate_overlay_panel(image, pred_mask, color=pred_overlay_color), f"Prediction\n{metric_str}")
+        # Panel 3: Ground Truth (Mask only)
+        plotter.add_panel(generate_mask_panel(gt_mask), "Ground Truth")
         
+        # --- Row 2 ---
+        # Panel 4: Prediction (Mask only)
+        primary_metric_name = viz_config.get('primary_metric', 'dice').upper()
+        metric_val = metrics.get(viz_config.get('primary_metric', 'dice'), 0.0)
+        pred_title = f"Prediction\n{primary_metric_name}={metric_val:.4f}"
+        plotter.add_panel(generate_mask_panel(pred_mask), pred_title)
+
+        # Panel 5: Error Map
+        plotter.add_panel(generate_error_map_panel(gt_mask, pred_mask, viz_style), "Error Map (FP: Red, FN: Blue)")
+
+        # Panel 6: Overlay
+        pred_overlay_color = viz_style.get('pred_overlay_color_rgb', [227, 27, 27])
         overlay_img = generate_overlay_panel(image, pred_mask, color=pred_overlay_color, alpha=viz_style.get('overlay_alpha', 0.4))
-        comparison_plotter.add_panel(overlay_img, "Overlay")
+        plotter.add_panel(overlay_img, "Overlay")
 
-        comparison_plotter.render(
+        # Render the 2x3 grid
+        plotter.render(
             save_path=output_dir / f"{image_id}_comparison.png",
+            suptitle=f"Evaluation for Image: {image_id}",
+            force_cols=viz_style.get('comparison_layout_cols', 3), # Force 3 columns
             show=False
         )
     except Exception as e:
@@ -248,25 +255,20 @@ def generate_evaluation_visuals(
 
     # --- 2. (Optional) Generate and save the feature bank panel ---
     if viz_config.get('visualize_feature_bank', False) and feature_bank_config.get('use', False):
+        # Этот блок остается таким же, как я присылал ранее,
+        # так как он уже был спроектирован правильно.
         try:
             fb_plotter = Plotter(viz_style)
-            
             channels = feature_bank_config.get('channels', ['raw'])
-            
-            # DEV: Мы вызываем отдельные функции фильтров "на лету",
-            # чтобы не зависеть от `build_feature_stack` и его нормализации.
-            # Это дает нам больше контроля над визуализацией.
-            
-            # Нормализуем входное изображение до uint8 для фильтров, которые этого ожидают
             img_u8 = _normalize_to_uint8(image)
             
             for channel_name in channels:
                 try:
                     title = channel_name.capitalize()
                     filtered_img = None
-                    
+                    # ... (остальная логика применения фильтров без изменений)
                     if channel_name == 'raw':
-                        filtered_img = image # Показываем исходное изображение без z-score
+                        filtered_img = image
                     elif channel_name == 'clahe':
                         filtered_img = filter_functions.apply_clahe(img_u8)
                     elif channel_name == 'scharr':
@@ -284,11 +286,12 @@ def generate_evaluation_visuals(
                         panel = generate_filter_panel(filtered_img, viz_style.get('colormap', 'viridis'))
                         fb_plotter.add_panel(panel, title)
                 except Exception as e:
-                    print(f"Warning: Could not apply filter '{channel_name}' for visualization. Error: {e}")
+                    print(f"Warning: Could not apply filter '{channel_name}' for viz. Error: {e}")
 
             if fb_plotter.panels:
                 fb_plotter.render(
                     save_path=output_dir / f"{image_id}_feature_bank.png",
+                    suptitle=f"Feature Bank for Image: {image_id}",
                     show=False
                 )
         except Exception as e:
