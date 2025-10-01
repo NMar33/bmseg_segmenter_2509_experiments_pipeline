@@ -153,7 +153,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['train']['epochs'])
     
     dice_loss = DiceLoss(mode='binary', from_logits=True)
-    bce_loss = SoftBceWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
+    bce_loss = SoftBCEWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
     loss_weights = {'dice': cfg['loss']['params']['dice_weight'], 'bce': cfg['loss']['params']['bce_weight']}
 
     scaler = torch.amp.GradScaler(device_type, enabled=cfg['train']['amp'])
