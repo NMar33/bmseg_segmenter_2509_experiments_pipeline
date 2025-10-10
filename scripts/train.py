@@ -19,9 +19,13 @@ from segmentation_models_pytorch.losses import DiceLoss, SoftBCEWithLogitsLoss
 import mlflow
 from tqdm import tqdm
 
+import torch.nn as nn # <-- Добавить этот импорт
+
 from segwork.utils import set_seed, load_config, flatten_config
-from segwork.data.dataset import TilesDataset, default_train_aug
+# --- ИЗМЕНЕНИЕ: Импортируем `build_augmentations` вместо `default_train_aug` ---
+from segwork.data.dataset import TilesDataset, build_augmentations
 from segwork.models.model_builder import build_model
+
 from segwork.metrics.core import dice_score
 # Импортируем обе наши новые функции логирования
 from segwork.mlflow_loggers.training_loggers import log_validation_visuals, log_adapter_weights
@@ -33,6 +37,19 @@ def load_tile_ids_from_file(split_path: Path) -> list[str]:
         return []
     with open(split_path, 'r') as f:
         return [line.strip() for line in f if line.strip()]
+
+def set_encoder_grad(model: nn.Module, requires_grad: bool):
+    """Sets the `requires_grad` flag for the encoder of an SMP model."""
+    encoder = None
+    if isinstance(model, nn.Sequential) and hasattr(model[1], 'encoder'): # Модель с адаптером
+        encoder = model[1].encoder
+    elif hasattr(model, 'encoder'): # Стандартная SMP модель
+        encoder = model.encoder
+    
+    if encoder:
+        for param in encoder.parameters():
+            param.requires_grad = requires_grad
+        print(f"INFO: Encoder gradients have been {'ENABLED' if requires_grad else 'DISABLED'}.")
 
 def main():
     parser = argparse.ArgumentParser(description="Train a segmentation model for a specific seed.")
@@ -60,9 +77,22 @@ def main():
     if not train_tile_ids:
         raise ValueError(f"Training set is empty. Check if `train_tiles.txt` was generated correctly in {splits_dir}")
 
-    ds_train = TilesDataset(tiles_root, train_tile_ids, augmentations=default_train_aug())
-    ds_val = TilesDataset(tiles_root, val_tile_ids, augmentations=None) if val_tile_ids else None
-    
+    # --- ИЗМЕНЕНИЕ: Динамически строим аугментации из конфига ---
+    train_augs = build_augmentations(cfg['data'].get('augmentations', {}))
+
+    ds_train = TilesDataset(
+            tiles_root, 
+            train_tile_ids, 
+            augmentations=train_augs,
+            mask_processing_cfg=cfg['data'].get('mask_processing')
+        )
+    ds_val = TilesDataset(
+        tiles_root, 
+        val_tile_ids, 
+        augmentations=None, 
+        mask_processing_cfg=cfg['data'].get('mask_processing')
+    ) if val_tile_ids else None
+
     dl_train = DataLoader(ds_train, batch_size=cfg['train']['batch_size'], shuffle=True, num_workers=cfg['train']['num_workers'], pin_memory=(device_type == 'cuda'))
     dl_val = DataLoader(ds_val, batch_size=cfg['eval']['batch_size'], shuffle=False, num_workers=cfg['train']['num_workers'], pin_memory=(device_type == 'cuda')) if ds_val else None
     print(f"Data loaded: {len(ds_train)} train tiles, {len(ds_val) if ds_val else 0} validation tiles.")
@@ -85,16 +115,45 @@ def main():
             })
         print(f"Selected {len(fixed_val_sample_paths)} fixed samples for validation visualization.")
 
-    # --- 2. Model, Optimizer, Loss ---
+    # --- 2.1 Model Initialization and Encoder Freezing ---
     model = build_model(cfg).to(device)
     
     if args.init_checkpoint:
         print(f"Initializing model weights from checkpoint: {args.init_checkpoint}")
         model.load_state_dict(torch.load(args.init_checkpoint, map_location=device), strict=False)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg['train']['optimizer']['lr'], weight_decay=cfg['train']['optimizer']['weight_decay'])
+    freeze_epochs = cfg['model'].get('adapter', {}).get('freeze_encoder_epochs', 0)
+    if freeze_epochs > 0:
+        set_encoder_grad(model, requires_grad=False)
+
+    # --- 2.2 Optimizer and Scheduler ---
+    # DEV: Важно передавать в оптимизатор только те параметры, которые сейчас обучаемы.
+    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    optimizer = torch.optim.AdamW(
+        trainable_params, 
+        lr=float(cfg['train']['optimizer']['lr']), 
+        weight_decay=float(cfg['train']['optimizer']['weight_decay'])
+    )
+
+    # DEV: Планировщик создается один раз, но мы будем его обновлять, если оптимизатор изменится.
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['train']['epochs'])
+
+
+    # # --- 2. Model, Optimizer, Loss ---
+    # model = build_model(cfg).to(device)
     
+    # if args.init_checkpoint:
+    #     print(f"Initializing model weights from checkpoint: {args.init_checkpoint}")
+    #     model.load_state_dict(torch.load(args.init_checkpoint, map_location=device), strict=False)
+
+    # # --- ИЗМЕНЕНИЕ: Добавляем логику заморозки энкодера ---
+    # freeze_epochs = cfg['model'].get('adapter', {}).get('freeze_encoder_epochs', 0)
+    # if freeze_epochs > 0:
+    #     set_encoder_grad(model, requires_grad=False)
+
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg['train']['optimizer']['lr']), weight_decay=float(cfg['train']['optimizer']['weight_decay']))
+
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['train']['epochs'])
     dice_loss = DiceLoss(mode='binary', from_logits=True)
     bce_loss = SoftBCEWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
     loss_weights = {'dice': cfg['loss']['params']['dice_weight'], 'bce': cfg['loss']['params']['bce_weight']}
@@ -113,9 +172,43 @@ def main():
         mlflow.log_artifact(args.config, artifact_path="configs")
 
         best_val_dice = -1.0
+
         for epoch in range(cfg['train']['epochs']):
+
+            # --- Unfreeze encoder logic ---
+            if freeze_epochs > 0 and epoch == freeze_epochs:
+                print(f"\n--- Unfreezing encoder at epoch {epoch} ---")
+                set_encoder_grad(model, requires_grad=True)
+                
+                # DEV: Пересоздаем оптимизатор, чтобы он "увидел" новые,
+                # размороженные параметры энкодера. Это самая надежная практика.
+                print("Re-initializing optimizer to include all trainable parameters.")
+                # trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+                optimizer = torch.optim.AdamW(
+                    model.parameters(), 
+                    lr=float(cfg['train']['optimizer']['lr']), 
+                    weight_decay=float(cfg['train']['optimizer']['weight_decay'])
+                )
+                
+                # DEV: Адаптируем планировщик к новому оптимизатору и оставшимся эпохам.
+                # Мы "перематываем" его состояние на текущую эпоху.
+                print("Re-initializing scheduler.")
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer, 
+                    T_max=cfg['train']['epochs'],
+                    last_epoch=epoch - 1 # Устанавливаем текущее состояние
+                )
+
+            # # --- ИЗМЕНЕНИЕ: Логика разморозки энкодера в начале эпохи ---
+            # if freeze_epochs > 0 and epoch == freeze_epochs:
+            #     print(f"\n--- Unfreezing encoder at epoch {epoch} ---")
+            #     set_encoder_grad(model, requires_grad=True)
+            #     # DEV: Пересоздавать оптимизатор здесь не обязательно для AdamW,
+            #     # так как он адаптирует моменты для новых параметров.
+            
             model.train()
             train_loss = 0.0
+
             for images, masks in tqdm(dl_train, desc=f"Epoch {epoch+1}/{cfg['train']['epochs']} [Train]"):
                 images, masks = images.to(device), masks.to(device)
                 with torch.amp.autocast(device_type=device_type, enabled=cfg['train']['amp']):

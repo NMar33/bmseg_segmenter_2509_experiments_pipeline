@@ -12,6 +12,7 @@
 # creating a separate run for each seed.
 run_seeds: [42, 11] #[42, 1337, 2023]
 
+
 # --- DATA CONFIGURATION ---
 data:
   # Paths to data directories. These MUST be overridden in experimental configs.
@@ -47,6 +48,53 @@ data:
   tiling:
     tile_size: 512
     overlap: 64
+
+
+  # --- НОВЫЙ БЛОК: ВСТАВИТЬ ЭТОТ КОД ---
+  # --- Mask Processing Configuration ---
+  # This section defines how raw mask files (0-255) are converted into
+  # the binary {0, 1} format required for training. This is a CRITICAL
+  # parameter that defines what the model considers the "target" class.
+  # Incorrectly setting this will lead to the model learning the wrong thing.
+  mask_processing:
+    # `binarize_mode` determines which pixel values become the target class (1).
+    #
+    # Available modes:
+    # - "nonzero": Any pixel value > 127 becomes 1. Correct for masks where
+    #              the object of interest is white (255) and the background is black (0).
+    #              This is the most common case.
+    #
+    # - "zero": Any pixel value < 128 becomes 1. Correct for inverted masks where
+    #           the object of interest (e.g., boundaries) is black (0) and the
+    #           background is white (255).
+    #
+    # - "ignore_zero": Any pixel value > 0 becomes 1. Correct for instance masks
+    #                  where the background is 0, and each object has a unique
+    #                  ID (1, 2, 3, ...). This treats all objects as a single class.
+    binarize_mode: "zero" #"nonzero" # Set a safe and common default.
+  
+  # --- AUGMENTATION CONFIGURATION ---
+  # This section controls the augmentations applied during training.
+  # Each key corresponds to an augmentation from the Albumentations library.
+  # To disable an augmentation, set its probability `p` to 0.0.
+  augmentations:
+    # --- IMPORTANT ---
+    # Photometric augmentations (RandomBrightnessContrast, RandomGamma, GaussNoise, etc.)
+    # are NOT compatible with multi-channel feature banks in the current implementation.
+    # They should ONLY be used when `data.feature_bank.use` is `false`.
+    # Using them with feature banks will lead to inconsistent data.
+    
+    # Geometric augmentations (safe for multi-channel)
+    HorizontalFlip: { p: 0.5 }
+    VerticalFlip: { p: 0.5 }
+    RandomRotate90: { p: 0.5 }
+    ShiftScaleRotate: { p: 0.5, shift_limit: 0.0625, scale_limit: 0.1, rotate_limit: 15 }
+    GaussianBlur: { p: 0.0, blur_limit: [3, 7] } # Disabled by default
+
+    # Photometric augmentations (use only with single-channel data)
+    RandomBrightnessContrast: { p: 0.0, brightness_limit: 0.2, contrast_limit: 0.2 }
+    RandomGamma: { p: 0.0, gamma_limit: [80, 120] }
+    GaussNoise: { p: 0.0, var_limit: [10.0, 50.0] }
   
   # Feature Bank parameters for `preprocess-tiles` script.
   feature_bank:

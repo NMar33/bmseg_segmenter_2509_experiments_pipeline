@@ -32,6 +32,7 @@ from segwork.data.stitching import stitch_tiles
 from segwork.metrics.core import dice_score, iou_score, boundary_f1_score
 from segwork.metrics.advanced import v_rand_score, warping_error_score
 from segwork.visualization.explorers import generate_evaluation_visuals
+from segwork.data.dataset import binarize_mask
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained segmentation model and log to MLflow.")
@@ -211,7 +212,9 @@ def main():
                     
                     source_split_folder = master_df[master_df['source_image_id'] == source_id]['source_split'].iloc[0]
                     full_image = tiff.imread(prepared_root / "images" / source_split_folder / f"{source_id}.tif")
-                    full_mask_gt = cv2.imread(str(prepared_root / "masks" / source_split_folder / f"{source_id}.png"), cv2.IMREAD_GRAYSCALE)
+                    full_mask_gt_raw = cv2.imread(str(prepared_root / "masks" / source_split_folder / f"{source_id}.png"), cv2.IMREAD_GRAYSCALE)
+                    full_mask_gt = binarize_mask(full_mask_gt_raw, cfg['data'].get('mask_processing'))
+                    # full_mask_gt = cv2.imread(str(prepared_root / "masks" / source_split_folder / f"{source_id}.png"), cv2.IMREAD_GRAYSCALE)
                     pred_prob_mask = tiff.imread(temp_preds_dir / f"{source_id}_pred.tif")
                     
                     # Собираем все метрики для этого изображения в один словарь
