@@ -201,6 +201,7 @@ def main():
         tiles_root, 
         val_tile_ids, 
         augmentations=None, 
+        mask_processing_config = cfg['data'].get('mask_processing'),
         mask_processing_cfg=cfg['data'].get('mask_processing')
     ) if val_tile_ids else None
 
