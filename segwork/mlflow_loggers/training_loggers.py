@@ -1,8 +1,11 @@
+# segwork\mlflow_loggers\training_loggers.py
+
 """
 A collection of helper functions for logging specific artifacts and metrics
 to MLflow during the training process.
 """
 import torch
+import torch.nn as nn
 import mlflow
 from pathlib import Path
 import shutil
@@ -90,32 +93,25 @@ def log_validation_visuals(
     mlflow.log_artifact(str(save_path), artifact_path="validation_previews")
     shutil.rmtree(temp_viz_dir)
 
-
 def log_adapter_weights(
-    model: torch.nn.Module,
+    channel_adapter: torch.nn.Module,
     epoch: int,
     feature_bank_channels: List[str]
 ):
     """
-    Finds a ChannelAdapter in the model, calculates the importance of each
-    input channel, and logs it as a metric to MLflow for each epoch.
+    Calculates the importance of each input channel in a ChannelAdapter
+    and logs it as a metric to MLflow.
     """
-    # Find the adapter module in the model
-    channel_adapter = None
-    if isinstance(model, torch.nn.Sequential) and isinstance(model[0], ChannelAdapter):
-        channel_adapter = model[0]
+    if not isinstance(channel_adapter, ChannelAdapter):
+        print(f"Warning: `log_adapter_weights` received an object of type "
+              f"{type(channel_adapter)}, not ChannelAdapter. Skipping.")
+        return
 
-    if channel_adapter is None:
-        return # Do nothing if this is not an adapter-based model
-
-    # Extract weights and calculate importance (mean absolute weight per input channel)
     with torch.no_grad():
-        # Shape: (out_channels, in_channels, 1, 1)
         weights = channel_adapter.proj.weight.detach().abs()
-        # Average across the output channels to get a single importance value per input channel
         per_channel_importance = weights.mean(dim=0).squeeze().cpu().numpy()
 
-    if per_channel_importance.size == 1: # Handle the case of a single input channel
+    if per_channel_importance.size == 1:
         per_channel_importance = [per_channel_importance.item()]
 
     if len(per_channel_importance) != len(feature_bank_channels):
@@ -123,9 +119,42 @@ def log_adapter_weights(
               f"and feature bank channels ({len(feature_bank_channels)}). Skipping weight logging.")
         return
 
-    # Create a dictionary of metrics and log to MLflow
     metrics_to_log = {
         f"adapter_weights/{name}": importance
         for name, importance in zip(feature_bank_channels, per_channel_importance)
     }
     mlflow.log_metrics(metrics_to_log, step=epoch)
+
+def log_gradient_norms(modules: Dict[str, nn.Module | None], global_step: int):
+    """
+    Calculates the L2 norm of gradients for specified model components and logs them.
+
+    Args:
+        modules: A dictionary mapping component names (e.g., 'encoder', 'decoder')
+                 to the nn.Module instances.
+        global_step: The current global training step (batch iteration).
+    """
+    metrics_to_log = {}
+    
+    for name, module in modules.items():
+        # Пропускаем, если модуль не найден (например, нет адаптера)
+        if module is None:
+            continue
+            
+        # Собираем параметры с ненулевыми градиентами
+        params_with_grad = [p for p in module.parameters() if p.grad is not None]
+        
+        if not params_with_grad:
+            # Если градиентов нет (например, модуль заморожен), логируем 0.0
+            norm = 0.0
+        else:
+            # Считаем общую L2 норму градиентов для этого модуля
+            # DEV: Мы создаем плоский вектор из всех градиентов модуля и считаем его норму.
+            # `torch.cat` - эффективный способ это сделать.
+            all_grads = torch.cat([p.grad.detach().flatten() for p in params_with_grad])
+            norm = torch.linalg.vector_norm(all_grads, 2.0).item()
+            
+        metrics_to_log[f'grad_norm/{name}'] = norm
+
+    if metrics_to_log:
+        mlflow.log_metrics(metrics_to_log, step=global_step)

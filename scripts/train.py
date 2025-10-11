@@ -27,8 +27,14 @@ from segwork.data.dataset import TilesDataset, build_augmentations
 from segwork.models.model_builder import build_model
 
 from segwork.metrics.core import dice_score
-# Импортируем обе наши новые функции логирования
-from segwork.mlflow_loggers.training_loggers import log_validation_visuals, log_adapter_weights
+
+from segwork.mlflow_loggers.training_loggers import (
+    log_validation_visuals,
+    log_adapter_weights,
+    log_gradient_norms
+)
+
+from segwork.models.adapter import ChannelAdapter
 
 def load_tile_ids_from_file(split_path: Path) -> list[str]:
     """Reads a list of tile IDs from a .txt file."""
@@ -51,15 +57,23 @@ def get_encoder(model: nn.Module) -> nn.Module | None:
         return model.encoder
     return None
 
+def get_decoder(model: nn.Module) -> nn.Module | None:
+    """Safely retrieves the decoder module from an SMP model."""
+    if isinstance(model, nn.Sequential) and hasattr(model[1], 'decoder'):
+        return model[1].decoder
+    elif hasattr(model, 'decoder'):
+        return model.decoder
+    return None
+
+def get_adapter(model: nn.Module) -> nn.Module | None:
+    """Safely retrieves the ChannelAdapter module."""
+    if isinstance(model, nn.Sequential) and isinstance(model[0], ChannelAdapter):
+        return model[0]
+    return None
 
 def set_encoder_grad(model: nn.Module, requires_grad: bool):
     """Sets the `requires_grad` flag for the encoder of an SMP model."""
     encoder = get_encoder(model)
-    # if isinstance(model, nn.Sequential) and hasattr(model[1], 'encoder'): # Модель с адаптером
-    #     encoder = model[1].encoder
-    # elif hasattr(model, 'encoder'): # Стандартная SMP модель
-    #     encoder = model.encoder
-    
     if encoder:
         for param in encoder.parameters():
             param.requires_grad = requires_grad
@@ -79,12 +93,6 @@ def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> torch.optim.Op
     
     # --- 1. Find the encoder module ---
     encoder_module = get_encoder(model)
-    # if isinstance(model, nn.Sequential) and hasattr(model[1], 'encoder'):
-    #     # Case M2/M3: Model is nn.Sequential(ChannelAdapter, Unet)
-    #     encoder_module = model[1].encoder
-    # elif hasattr(model, 'encoder'):
-    #     # Case M1: Model is a standard Unet
-    #     encoder_module = model.encoder
     
     # --- 2. Split parameters based on module membership ---
     if encoder_module:
@@ -235,46 +243,7 @@ def main():
     freeze_epochs = cfg['train'].get('fine_tuning', {}).get('freeze_encoder_epochs', 0)
     if freeze_epochs > 0:
         set_encoder_grad(model, requires_grad=False)
-
-    # # --- 2.1 Model Initialization and Encoder Freezing ---
-    # model = build_model(cfg).to(device)
     
-    # if args.init_checkpoint:
-    #     print(f"Initializing model weights from checkpoint: {args.init_checkpoint}")
-    #     model.load_state_dict(torch.load(args.init_checkpoint, map_location=device), strict=False)
-
-    # freeze_epochs = cfg['model'].get('adapter', {}).get('freeze_encoder_epochs', 0)
-    # if freeze_epochs > 0:
-    #     set_encoder_grad(model, requires_grad=False)
-
-    # # --- 2.2 Optimizer and Scheduler ---
-    # # DEV: Важно передавать в оптимизатор только те параметры, которые сейчас обучаемы.
-    # trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-    # optimizer = torch.optim.AdamW(
-    #     trainable_params, 
-    #     lr=float(cfg['train']['optimizer']['lr']), 
-    #     weight_decay=float(cfg['train']['optimizer']['weight_decay'])
-    # )
-
-    # # DEV: Планировщик создается один раз, но мы будем его обновлять, если оптимизатор изменится.
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['train']['epochs'])
-
-
-    # # --- 2. Model, Optimizer, Loss ---
-    # model = build_model(cfg).to(device)
-    
-    # if args.init_checkpoint:
-    #     print(f"Initializing model weights from checkpoint: {args.init_checkpoint}")
-    #     model.load_state_dict(torch.load(args.init_checkpoint, map_location=device), strict=False)
-
-    # # --- ИЗМЕНЕНИЕ: Добавляем логику заморозки энкодера ---
-    # freeze_epochs = cfg['model'].get('adapter', {}).get('freeze_encoder_epochs', 0)
-    # if freeze_epochs > 0:
-    #     set_encoder_grad(model, requires_grad=False)
-
-    # optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg['train']['optimizer']['lr']), weight_decay=float(cfg['train']['optimizer']['weight_decay']))
-
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['train']['epochs'])
     dice_loss = DiceLoss(mode='binary', from_logits=True)
     bce_loss = SoftBCEWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
     loss_weights = {'dice': cfg['loss']['params']['dice_weight'], 'bce': cfg['loss']['params']['bce_weight']}
@@ -293,6 +262,7 @@ def main():
         mlflow.log_artifact(args.config, artifact_path="configs")
 
         best_val_dice = -1.0
+        global_step = 0
 
         for epoch in range(cfg['train']['epochs']):
 
@@ -302,36 +272,7 @@ def main():
                 set_encoder_grad(model, requires_grad=True)
                 # DEV: Больше ничего делать не нужно! Оптимизатор уже знает об этих
                 # параметрах, а планировщик продолжит свою работу без изменений.
-            # if freeze_epochs > 0 and epoch == freeze_epochs:
-            #     print(f"\n--- Unfreezing encoder at epoch {epoch} ---")
-            #     set_encoder_grad(model, requires_grad=True)
-                
-            #     # DEV: Пересоздаем оптимизатор, чтобы он "увидел" новые,
-            #     # размороженные параметры энкодера. Это самая надежная практика.
-            #     print("Re-initializing optimizer to include all trainable parameters.")
-            #     # trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-            #     optimizer = torch.optim.AdamW(
-            #         model.parameters(), 
-            #         lr=float(cfg['train']['optimizer']['lr']), 
-            #         weight_decay=float(cfg['train']['optimizer']['weight_decay'])
-            #     )
-                
-            #     # DEV: Адаптируем планировщик к новому оптимизатору и оставшимся эпохам.
-            #     # Мы "перематываем" его состояние на текущую эпоху.
-            #     print("Re-initializing scheduler.")
-            #     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            #         optimizer, 
-            #         T_max=cfg['train']['epochs'],
-            #         last_epoch=epoch - 1 # Устанавливаем текущее состояние
-            #     )
 
-            # # --- ИЗМЕНЕНИЕ: Логика разморозки энкодера в начале эпохи ---
-            # if freeze_epochs > 0 and epoch == freeze_epochs:
-            #     print(f"\n--- Unfreezing encoder at epoch {epoch} ---")
-            #     set_encoder_grad(model, requires_grad=True)
-            #     # DEV: Пересоздавать оптимизатор здесь не обязательно для AdamW,
-            #     # так как он адаптирует моменты для новых параметров.
-            
             model.train()
             train_loss = 0.0
 
@@ -342,9 +283,19 @@ def main():
                     loss = loss_weights['dice'] * dice_loss(logits, masks) + loss_weights['bce'] * bce_loss(logits, masks)
                 optimizer.zero_grad()
                 scaler.scale(loss).backward()
+
+                # --- Log gradient norms for each component ---
+                modules_to_log = {
+                    "adapter": get_adapter(model),
+                    "encoder": get_encoder(model),
+                    "decoder": get_decoder(model)
+                }
+                log_gradient_norms(modules=modules_to_log, global_step=global_step)
+
                 scaler.step(optimizer)
                 scaler.update()
                 train_loss += loss.item()
+                global_step += 1
             
             scheduler.step()
             avg_train_loss = train_loss / len(dl_train)
@@ -364,7 +315,17 @@ def main():
                 avg_val_dice = np.mean(val_dices) if val_dices else 0.0
             
             print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}, Val Dice = {avg_val_dice:.4f}")
-            mlflow.log_metrics({"train_loss": avg_train_loss, "val_dice": avg_val_dice, "lr": optimizer.param_groups[0]['lr']}, step=epoch)
+            log = {
+                    "train/loss": avg_train_loss,
+                    "val/dice": avg_val_dice,
+                    "lr/decoder_adapter": optimizer.param_groups[0]['lr'] # Основной lr
+                }
+            if len(optimizer.param_groups) > 1:
+                # Если есть вторая группа (энкодер), логируем и ее lr
+                log["lr/encoder"] = optimizer.param_groups[1]['lr']
+
+            mlflow.log_metrics(log, step=epoch)
+    
 
             # --- Log Visuals and Adapter Weights ---
             if fixed_val_sample_paths:
@@ -379,11 +340,14 @@ def main():
             
             # Log adapter weights if the model uses one
             if cfg['model'].get('adapter', {}).get('use', False):
-                log_adapter_weights(
-                    model=model,
-                    epoch=epoch,
-                    feature_bank_channels=cfg['data']['feature_bank']['channels']
-                )
+                adapter = get_adapter(model)
+                if adapter:
+                    # DEV: Передаем сам модуль адаптера, а не всю модель.
+                    log_adapter_weights(
+                        channel_adapter=adapter,
+                        epoch=epoch,
+                        feature_bank_channels=cfg['data']['feature_bank']['channels']
+                    )
 
             # --- Save Best Model ---
             if avg_val_dice > best_val_dice:
