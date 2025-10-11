@@ -99,8 +99,9 @@ def main():
             source_split_folder = source_split_folder_series.iloc[0]
             
             full_image = tiff.imread(prepared_root / "images" / source_split_folder / f"{source_id}.tif")
-            full_mask_gt = cv2.imread(str(prepared_root / "masks" / source_split_folder / f"{source_id}.png"), cv2.IMREAD_GRAYSCALE)
-            full_mask_gt = (full_mask_gt > 127).astype(np.float32)
+            full_mask_gt_raw = cv2.imread(str(prepared_root / "masks" / source_split_folder / f"{source_id}.png"), cv2.IMREAD_GRAYSCALE)
+            # full_mask_gt = (full_mask_gt > 127).astype(np.float32)
+            full_mask_gt = binarize_mask(full_mask_gt_raw, cfg['data'].get('mask_processing'))
 
             H, W = full_image.shape
             tile_size = cfg['data']['tiling']['tile_size']

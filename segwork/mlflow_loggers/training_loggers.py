@@ -16,6 +16,7 @@ import cv2
 from segwork.visualization.plotter import Plotter
 from segwork.visualization.generators import generate_raw_panel, generate_overlay_panel
 from segwork.models.adapter import ChannelAdapter
+from segwork.data.dataset import binarize_mask
 
 def log_validation_visuals(
     model: torch.nn.Module,
@@ -51,8 +52,9 @@ def log_validation_visuals(
             try:
                 # 1. Load data from paths
                 image_stack = np.load(paths['image_path']).astype(np.float32)
-                gt_mask_np = cv2.imread(str(paths['mask_path']), cv2.IMREAD_GRAYSCALE)
-                gt_mask_np = (gt_mask_np > 127).astype(np.float32)
+                gt_mask_np_raw = cv2.imread(str(paths['mask_path']), cv2.IMREAD_GRAYSCALE)
+                # gt_mask_np = (gt_mask_np > 127).astype(np.float32)
+                gt_mask_np = binarize_mask(gt_mask_np_raw, cfg['data'].get('mask_processing'))
 
                 # For visualization, we only show the first (raw) channel if the stack is multi-channel
                 display_image_np = image_stack[0] if image_stack.ndim == 3 else image_stack
