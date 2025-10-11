@@ -22,7 +22,7 @@ def log_validation_visuals(
     model: torch.nn.Module,
     val_sample_paths: List[Dict[str, Path]],
     epoch: int,
-    mask_processing_config: str,
+    mask_processing_cfg: str,
     viz_config: Dict[str, Any],    
     device: torch.device,
     amp_enabled: bool
