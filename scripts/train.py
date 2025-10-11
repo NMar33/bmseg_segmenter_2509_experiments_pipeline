@@ -201,7 +201,6 @@ def main():
         tiles_root, 
         val_tile_ids, 
         augmentations=None, 
-        mask_processing_config = cfg['data'].get('mask_processing'),
         mask_processing_cfg=cfg['data'].get('mask_processing')
     ) if val_tile_ids else None
 
@@ -334,6 +333,7 @@ def main():
                     model=model,
                     val_sample_paths=fixed_val_sample_paths,
                     epoch=epoch,
+                    mask_processing_cfg=cfg['data'].get('mask_processing'),
                     viz_config=viz_cfg,
                     device=device,
                     amp_enabled=cfg['train']['amp']
