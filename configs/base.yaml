@@ -124,16 +124,46 @@ model:
     init: "xavier"
     # DEV: Freezing the encoder for a few epochs allows the adapter to learn a
     # reasonable initial projection before the entire network is fine-tuned.
-    freeze_encoder_epochs: 1
+    # freeze_encoder_epochs: 1 переместил
 
 # --- TRAINING CONFIGURATION ---
 train:
-  epochs: 3
+  epochs: 50
   batch_size: 8
   num_workers: 2
   amp: true
   
-  # --- НОВЫЙ БЛОК ЗДЕСЬ ---
+  # --- Fine-Tuning Strategy ---
+  # This section controls how a pre-trained model is fine-tuned.
+  # It is typically used for models with an adapter (M2, M3).
+  fine_tuning:
+    # Number of initial epochs to keep the encoder weights frozen.
+    # During this phase, only the head (adapter, decoder) is trained.
+    # Set to 0 to train the entire model from the start.
+    freeze_encoder_epochs: 10
+
+  # --- Optimizer Configuration ---
+  optimizer:
+    name: "adamw"
+    # `lr` is the main learning rate, used for the model's head (decoder, adapter).
+    lr: 3.0e-4
+    # `encoder_lr` is the specific learning rate for the encoder backbone during fine-tuning.
+    # It is recommended to use a smaller value than `lr`.
+    # If `null`, it will default to `lr`.
+    encoder_lr: 3.0e-5
+    weight_decay: 1.0e-4
+  
+  # --- Scheduler Configuration ---
+  scheduler:
+    # `warmup_epochs`: Number of epochs for the linear learning rate warmup.
+    # The LR will increase from a very small value to the target LR over this period.
+    # This is highly recommended to stabilize training at the beginning.
+    # Set to 0 to disable.
+    warmup_epochs: 10
+    # `main_scheduler_type` is the schedule to use *after* the warmup phase.
+    main_scheduler_type: "cosine"
+
+  # --- Validation Visualization ---
   # Configures visualization of validation samples during training.
   validation_visualization:
     enabled: true        # Master switch to log validation previews to MLflow.
@@ -149,15 +179,39 @@ train:
       gt_color_rgb: [0, 170, 0]
       pred_color_rgb: [227, 27, 27]
       overlay_alpha: 0.4
+
+# # --- TRAINING CONFIGURATION ---
+# train:
+#   epochs: 3
+#   batch_size: 8
+#   num_workers: 2
+#   amp: true
   
-  optimizer:
-    name: "adamw"
-    lr: 3.0e-4
-    weight_decay: 1.0e-4
+#   # --- НОВЫЙ БЛОК ЗДЕСЬ ---
+#   # Configures visualization of validation samples during training.
+#   validation_visualization:
+#     enabled: true        # Master switch to log validation previews to MLflow.
+#     num_samples: 4       # How many fixed validation samples to show per epoch.
+#     # DEV: Мы можем переиспользовать стили из секции `eval.visualization`,
+#     # но лучше определить их здесь явно для независимости модулей.
+#     style:
+#       figsize_per_panel: [5, 5]
+#       dpi: 100 # Меньше DPI для более "легких" артефактов
+#       title_fontsize: 10
+#       suptitle_fontsize: 14
+#       # Используем те же цвета, что и в `eval`
+#       gt_color_rgb: [0, 170, 0]
+#       pred_color_rgb: [227, 27, 27]
+#       overlay_alpha: 0.4
   
-  scheduler:
-    name: "cosine"
-    params: {}
+#   optimizer:
+#     name: "adamw"
+#     lr: 3.0e-4
+#     weight_decay: 1.0e-4
+  
+#   scheduler:
+#     name: "cosine"
+#     params: {}
 
 # --- LOSS FUNCTION CONFIGURATION ---
 loss:

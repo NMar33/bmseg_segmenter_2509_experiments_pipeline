@@ -37,19 +37,122 @@ def load_tile_ids_from_file(split_path: Path) -> list[str]:
         return []
     with open(split_path, 'r') as f:
         return [line.strip() for line in f if line.strip()]
+    
+def get_encoder(model: nn.Module) -> nn.Module | None:
+    """
+    Safely retrieves the encoder module from a standard SMP model or an
+    SMP model wrapped in an nn.Sequential (e.g., with a ChannelAdapter).
+    """
+    if isinstance(model, nn.Sequential) and hasattr(model[1], 'encoder'):
+        # Case M2/M3: Model is nn.Sequential(ChannelAdapter, Unet)
+        return model[1].encoder
+    elif hasattr(model, 'encoder'):
+        # Case M1: Model is a standard Unet
+        return model.encoder
+    return None
+
 
 def set_encoder_grad(model: nn.Module, requires_grad: bool):
     """Sets the `requires_grad` flag for the encoder of an SMP model."""
-    encoder = None
-    if isinstance(model, nn.Sequential) and hasattr(model[1], 'encoder'): # Модель с адаптером
-        encoder = model[1].encoder
-    elif hasattr(model, 'encoder'): # Стандартная SMP модель
-        encoder = model.encoder
+    encoder = get_encoder(model)
+    # if isinstance(model, nn.Sequential) and hasattr(model[1], 'encoder'): # Модель с адаптером
+    #     encoder = model[1].encoder
+    # elif hasattr(model, 'encoder'): # Стандартная SMP модель
+    #     encoder = model.encoder
     
     if encoder:
         for param in encoder.parameters():
             param.requires_grad = requires_grad
         print(f"INFO: Encoder gradients have been {'ENABLED' if requires_grad else 'DISABLED'}.")
+
+def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> torch.optim.Optimizer:
+    """
+    Creates an optimizer with parameter groups for differential learning rates.
+    This implementation robustly separates model parameters into 'encoder' and
+    'decoder_and_adapter' groups.
+    """
+    optimizer_cfg = config['train']['optimizer']
+    optimizer_name = optimizer_cfg.get('name', 'adamw').lower()
+    
+    encoder_params = []
+    decoder_and_adapter_params = []
+    
+    # --- 1. Find the encoder module ---
+    encoder_module = get_encoder(model)
+    # if isinstance(model, nn.Sequential) and hasattr(model[1], 'encoder'):
+    #     # Case M2/M3: Model is nn.Sequential(ChannelAdapter, Unet)
+    #     encoder_module = model[1].encoder
+    # elif hasattr(model, 'encoder'):
+    #     # Case M1: Model is a standard Unet
+    #     encoder_module = model.encoder
+    
+    # --- 2. Split parameters based on module membership ---
+    if encoder_module:
+        # Get the IDs of all parameters belonging to the encoder
+        encoder_param_ids = {id(p) for p in encoder_module.parameters()}
+        
+        # Iterate through all model parameters and assign them to a group
+        for param in model.parameters():
+            if id(param) in encoder_param_ids:
+                encoder_params.append(param)
+            else:
+                decoder_and_adapter_params.append(param)
+        
+        print(f"Successfully split parameters into {len(encoder_params)} encoder params "
+              f"and {len(decoder_and_adapter_params)} decoder/adapter params.")
+    else:
+        # Fallback if no encoder is found: treat all parameters as one group.
+        print("Warning: Encoder module not found. Treating all parameters as a single group.")
+        decoder_and_adapter_params = list(model.parameters())
+
+    # --- 3. Create parameter groups for the optimizer ---
+    base_lr = float(optimizer_cfg['lr'])
+    encoder_lr = float(optimizer_cfg.get('encoder_lr', base_lr))
+    
+    param_groups = [
+        {'params': decoder_and_adapter_params, 'lr': base_lr},
+    ]
+    # Only add the encoder group if it has parameters
+    if encoder_params:
+        param_groups.append({'params': encoder_params, 'lr': encoder_lr})
+    
+    print(f"Optimizer: Building {optimizer_name.upper()} with {len(param_groups)} param groups.")
+    print(f"  - Decoder/Adapter LR: {base_lr}")
+    if encoder_params:
+        print(f"  - Encoder LR: {encoder_lr}")
+
+    # --- 4. Create the optimizer instance ---
+    if optimizer_name == 'adamw':
+        return torch.optim.AdamW(
+            param_groups,
+            weight_decay=float(optimizer_cfg.get('weight_decay', 1e-4))
+        )
+    else:
+        raise NotImplementedError(f"Optimizer '{optimizer_name}' is not implemented in `create_optimizer`.")
+
+def create_scheduler(optimizer: torch.optim.Optimizer, config: Dict[str, Any]) -> torch.optim.lr_scheduler._LRScheduler:
+    """Creates a scheduler with an optional linear warmup phase."""
+    scheduler_cfg = config['train']['scheduler']
+    total_epochs = config['train']['epochs']
+    warmup_epochs = scheduler_cfg.get('warmup_epochs', 0)
+    
+    if warmup_epochs > 0:
+        print(f"Using a scheduler with {warmup_epochs} warmup epochs.")
+        # Scheduler for the warmup phase
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1e-6, end_factor=1.0, total_iters=warmup_epochs
+        )
+        # Main scheduler for the post-warmup phase
+        main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=total_epochs - warmup_epochs
+        )
+        # Chain them together
+        return torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[warmup_epochs]
+        )
+    else:
+        print("Using a standard CosineAnnealingLR scheduler without warmup.")
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs)
 
 def main():
     parser = argparse.ArgumentParser(description="Train a segmentation model for a specific seed.")
@@ -115,28 +218,46 @@ def main():
             })
         print(f"Selected {len(fixed_val_sample_paths)} fixed samples for validation visualization.")
 
-    # --- 2.1 Model Initialization and Encoder Freezing ---
+    # --- 2. Model, Optimizer, Scheduler ---
     model = build_model(cfg).to(device)
     
     if args.init_checkpoint:
         print(f"Initializing model weights from checkpoint: {args.init_checkpoint}")
         model.load_state_dict(torch.load(args.init_checkpoint, map_location=device), strict=False)
 
-    freeze_epochs = cfg['model'].get('adapter', {}).get('freeze_encoder_epochs', 0)
+    # --- Создаем оптимизатор и планировщик ---
+    # DEV: Сначала вызываем фабрики, и только потом замораживаем.
+    # Это гарантирует, что оптимизатор "знает" обо всех параметрах с самого начала.
+    optimizer = create_optimizer(model, cfg)
+    scheduler = create_scheduler(optimizer, cfg)
+
+    # Замораживаем энкодер, если это требуется по стратегии
+    freeze_epochs = cfg['train'].get('fine_tuning', {}).get('freeze_encoder_epochs', 0)
     if freeze_epochs > 0:
         set_encoder_grad(model, requires_grad=False)
 
-    # --- 2.2 Optimizer and Scheduler ---
-    # DEV: Важно передавать в оптимизатор только те параметры, которые сейчас обучаемы.
-    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-    optimizer = torch.optim.AdamW(
-        trainable_params, 
-        lr=float(cfg['train']['optimizer']['lr']), 
-        weight_decay=float(cfg['train']['optimizer']['weight_decay'])
-    )
+    # # --- 2.1 Model Initialization and Encoder Freezing ---
+    # model = build_model(cfg).to(device)
+    
+    # if args.init_checkpoint:
+    #     print(f"Initializing model weights from checkpoint: {args.init_checkpoint}")
+    #     model.load_state_dict(torch.load(args.init_checkpoint, map_location=device), strict=False)
 
-    # DEV: Планировщик создается один раз, но мы будем его обновлять, если оптимизатор изменится.
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['train']['epochs'])
+    # freeze_epochs = cfg['model'].get('adapter', {}).get('freeze_encoder_epochs', 0)
+    # if freeze_epochs > 0:
+    #     set_encoder_grad(model, requires_grad=False)
+
+    # # --- 2.2 Optimizer and Scheduler ---
+    # # DEV: Важно передавать в оптимизатор только те параметры, которые сейчас обучаемы.
+    # trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    # optimizer = torch.optim.AdamW(
+    #     trainable_params, 
+    #     lr=float(cfg['train']['optimizer']['lr']), 
+    #     weight_decay=float(cfg['train']['optimizer']['weight_decay'])
+    # )
+
+    # # DEV: Планировщик создается один раз, но мы будем его обновлять, если оптимизатор изменится.
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['train']['epochs'])
 
 
     # # --- 2. Model, Optimizer, Loss ---
@@ -179,25 +300,30 @@ def main():
             if freeze_epochs > 0 and epoch == freeze_epochs:
                 print(f"\n--- Unfreezing encoder at epoch {epoch} ---")
                 set_encoder_grad(model, requires_grad=True)
+                # DEV: Больше ничего делать не нужно! Оптимизатор уже знает об этих
+                # параметрах, а планировщик продолжит свою работу без изменений.
+            # if freeze_epochs > 0 and epoch == freeze_epochs:
+            #     print(f"\n--- Unfreezing encoder at epoch {epoch} ---")
+            #     set_encoder_grad(model, requires_grad=True)
                 
-                # DEV: Пересоздаем оптимизатор, чтобы он "увидел" новые,
-                # размороженные параметры энкодера. Это самая надежная практика.
-                print("Re-initializing optimizer to include all trainable parameters.")
-                # trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-                optimizer = torch.optim.AdamW(
-                    model.parameters(), 
-                    lr=float(cfg['train']['optimizer']['lr']), 
-                    weight_decay=float(cfg['train']['optimizer']['weight_decay'])
-                )
+            #     # DEV: Пересоздаем оптимизатор, чтобы он "увидел" новые,
+            #     # размороженные параметры энкодера. Это самая надежная практика.
+            #     print("Re-initializing optimizer to include all trainable parameters.")
+            #     # trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+            #     optimizer = torch.optim.AdamW(
+            #         model.parameters(), 
+            #         lr=float(cfg['train']['optimizer']['lr']), 
+            #         weight_decay=float(cfg['train']['optimizer']['weight_decay'])
+            #     )
                 
-                # DEV: Адаптируем планировщик к новому оптимизатору и оставшимся эпохам.
-                # Мы "перематываем" его состояние на текущую эпоху.
-                print("Re-initializing scheduler.")
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    optimizer, 
-                    T_max=cfg['train']['epochs'],
-                    last_epoch=epoch - 1 # Устанавливаем текущее состояние
-                )
+            #     # DEV: Адаптируем планировщик к новому оптимизатору и оставшимся эпохам.
+            #     # Мы "перематываем" его состояние на текущую эпоху.
+            #     print("Re-initializing scheduler.")
+            #     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            #         optimizer, 
+            #         T_max=cfg['train']['epochs'],
+            #         last_epoch=epoch - 1 # Устанавливаем текущее состояние
+            #     )
 
             # # --- ИЗМЕНЕНИЕ: Логика разморозки энкодера в начале эпохи ---
             # if freeze_epochs > 0 and epoch == freeze_epochs:
