@@ -55,7 +55,7 @@ def log_validation_visuals(
                 image_stack = np.load(paths['image_path']).astype(np.float32)
                 gt_mask_np_raw = cv2.imread(str(paths['mask_path']), cv2.IMREAD_GRAYSCALE)
                 # gt_mask_np = (gt_mask_np > 127).astype(np.float32)
-                gt_mask_np = binarize_mask(gt_mask_np_raw, mask_processing_config)
+                gt_mask_np = binarize_mask(gt_mask_np_raw, mask_processing_cfg)
 
                 # For visualization, we only show the first (raw) channel if the stack is multi-channel
                 display_image_np = image_stack[0] if image_stack.ndim == 3 else image_stack
