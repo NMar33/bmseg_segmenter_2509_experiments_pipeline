@@ -1,70 +1,79 @@
 # segwork/metrics/core.py
+# segwork/metrics/core.py
 
 """
 Core metrics for segmentation evaluation.
 
-This module contains implementations for common, widely used segmentation metrics
-that can be calculated efficiently on PyTorch tensors or NumPy arrays.
+This module provides wrappers around standard, community-vetted metric
+implementations from libraries like `segmentation-models-pytorch` and `monai`
+to ensure reliability and comparability of results.
 """
 import torch
 import numpy as np
-from scipy.ndimage import distance_transform_edt
+
+# --- Библиотечные импорты ---
+import segmentation_models_pytorch.metrics as smp_metrics
+from monai.metrics import compute_surface_dice
 
 # =======================================================
-# Overlap-based Metrics
+# Overlap-based Metrics (using segmentation-models-pytorch)
 # =======================================================
 
 def dice_score(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """
-    Calculates the Dice score (F1 score) for semantic segmentation.
+    Calculates the Dice score (F1 score) using the `segmentation-models-pytorch` backend.
 
     Args:
         pred: Predicted probabilities, shape (N, 1, H, W), float tensor in [0, 1].
         target: Ground truth mask, shape (N, 1, H, W), float tensor {0, 1}.
-        eps: A small epsilon to avoid division by zero.
+        eps: A small epsilon for numerical stability (handled by smp_metrics).
 
     Returns:
         A tensor of Dice scores for each item in the batch, shape (N,).
     """
-    # DEV: Эта реализация численно стабильна и работает на батчах.
-    # Суммирование по `dim=[1,2,3]` "схлопывает" все измерения, кроме батча,
-    # давая нам по одной метрике на каждый пример.
     assert pred.shape == target.shape, "Prediction and target shapes must match."
     
-    intersection = (pred * target).sum(dim=[1, 2, 3])
-    union = pred.sum(dim=[1, 2, 3]) + target.sum(dim=[1, 2, 3])
+    # smp_metrics ожидает target в формате long
+    target_long = target.long()
+
+    # get_stats работает с батчами и возвращает TP, FP, FN, TN для каждого элемента
+    tp, fp, fn, tn = smp_metrics.get_stats(
+        pred, target_long, mode='binary', threshold=0.5
+    )
     
-    dice = (2. * intersection + eps) / (union + eps)
-    return dice
+    # f1_score также работает с батчами, возвращая тензор нужной формы
+    return smp_metrics.f1_score(tp, fp, fn, tn, reduction=None)
 
 def iou_score(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """
-    Calculates the Intersection over Union (IoU) or Jaccard Index.
+    Calculates the Intersection over Union (IoU) using the `segmentation-models-pytorch` backend.
 
     Args:
         pred: Predicted probabilities, shape (N, 1, H, W), float tensor in [0, 1].
         target: Ground truth mask, shape (N, 1, H, W), float tensor {0, 1}.
-        eps: A small epsilon to avoid division by zero.
+        eps: A small epsilon for numerical stability (handled by smp_metrics).
 
     Returns:
         A tensor of IoU scores for each item in the batch, shape (N,).
     """
     assert pred.shape == target.shape, "Prediction and target shapes must match."
-
-    intersection = (pred * target).sum(dim=[1, 2, 3])
-    union = pred.sum(dim=[1, 2, 3]) + target.sum(dim=[1, 2, 3]) - intersection
     
-    iou = (intersection + eps) / (union + eps)
-    return iou
+    target_long = target.long()
+
+    tp, fp, fn, tn = smp_metrics.get_stats(
+        pred, target_long, mode='binary', threshold=0.5
+    )
+    
+    return smp_metrics.iou_score(tp, fp, fn, tn, reduction=None)
 
 # =======================================================
-# Boundary-based Metrics
+# Boundary-based Metrics (using MONAI)
 # =======================================================
 
 @torch.no_grad()
-def boundary_f1_score(pred_bin: torch.Tensor, target_bin: torch.Tensor, boundary_eps: int = 2) -> np.ndarray:
+def boundary_f1_score(pred_bin: torch.Tensor, target_bin: torch.Tensor, boundary_eps: int = 3) -> float:
     """
-    Calculates the Boundary F1 score with a specified tolerance in pixels.
+    Calculates the Boundary F1 score (Surface Dice) using the `monai` backend.
 
     This metric is crucial for tasks where precise boundary delineation is important.
     It measures the agreement between predicted and ground truth boundaries.
@@ -72,70 +81,35 @@ def boundary_f1_score(pred_bin: torch.Tensor, target_bin: torch.Tensor, boundary
     Args:
         pred_bin: Binary prediction mask (N, 1, H, W), bool or uint8 tensor.
         target_bin: Binary ground truth mask (N, 1, H, W), bool or uint8 tensor.
-        boundary_eps: The tolerance in pixels for matching boundary points.
-                      A predicted boundary point is a true positive if it is within
-                      this distance of a true boundary point.
+        boundary_eps: The tolerance in pixels for matching boundary points. This is
+                      passed to MONAI's `class_thresholds`.
 
     Returns:
-        A NumPy array of Boundary F1 scores for each item in the batch.
+        A single float value representing the mean Boundary F1 score across the batch.
+        MONAI's implementation returns an aggregated value, not per-image scores.
     """
-    # DEV: Эта метрика дорогая, так как требует вычислений на CPU с SciPy.
-    # Мы используем `torch.no_grad()` и переводим данные на CPU.
-    # `distance_transform_edt` - это "Euclidean Distance Transform",
-    # которая эффективно вычисляет расстояние от каждого пикселя до ближайшего
-    # "нулевого" пикселя.
-    pred_np = pred_bin.squeeze(1).cpu().numpy().astype(np.uint8)
-    target_np = target_bin.squeeze(1).cpu().numpy().astype(np.uint8)
-    
-    scores = []
-    for i in range(pred_np.shape[0]):
-        # Compute distance transforms for both prediction and ground truth
-        pred_dist = distance_transform_edt(1 - pred_np[i])
-        target_dist = distance_transform_edt(1 - target_np[i])
+    # MONAI ожидает бинарные тензоры типа float
+    pred_float = pred_bin.float()
+    target_float = target_bin.float()
 
-        # Find boundary pixels (where distance to background is 1)
-        pred_boundary = (pred_dist == 1)
-        target_boundary = (target_dist == 1)
-        
-        # --- Calculate Precision ---
-        if pred_boundary.sum() == 0:
-            # If no boundary is predicted, precision is perfect (1.0) only if
-            # there was no true boundary to find. Otherwise, it's 0.
-            precision = 1.0 if target_boundary.sum() == 0 else 0.0
-        else:
-            # Count how many predicted boundary pixels are within `boundary_eps`
-            # of a true boundary.
-            tp_precision = np.sum(target_dist[pred_boundary] <= boundary_eps)
-            precision = tp_precision / pred_boundary.sum()
-            
-        # --- Calculate Recall ---
-        if target_boundary.sum() == 0:
-            # If no true boundary exists, recall is perfect (1.0) only if
-            # no boundary was predicted. Otherwise, it's 0.
-            recall = 1.0 if pred_boundary.sum() == 0 else 0.0
-        else:
-            # Count how many true boundary pixels are within `boundary_eps`
-            # of a predicted boundary.
-            tp_recall = np.sum(pred_dist[target_boundary] <= boundary_eps)
-            recall = tp_recall / target_boundary.sum()
-        
-        # --- Calculate F1 Score ---
-        if precision + recall == 0:
-            f1 = 0.0
-        else:
-            f1 = 2 * (precision * recall) / (precision + recall)
-        
-        scores.append(f1)
-        
-    return np.array(scores)
+    # MONAI работает с изотропным спейсингом по умолчанию (1.0, 1.0)
+    surface_dice = compute_surface_dice(
+        y_pred=pred_float,
+        y=target_float,
+        class_thresholds=[float(boundary_eps)],
+        spacing=(1.0, 1.0) # Предполагаем 2D-изображения с пиксельным спейсингом 1x1
+    )
+    # compute_surface_dice возвращает тензор с одним элементом (среднее по батчу)
+    return surface_dice.mean().item()
+
 
 # =======================================================
-# Pixel-based Metrics
+# Pixel-based Metrics (can remain custom or use SMP)
 # =======================================================
 
 def pixel_error(pred_bin: torch.Tensor, target_bin: torch.Tensor) -> torch.Tensor:
     """
-    Calculates the pixel error rate (1 - pixel accuracy).
+    Calculates the pixel error rate (1 - pixel accuracy) using the `segmentation-models-pytorch` backend.
     
     Args:
         pred_bin: Binary prediction mask (N, 1, H, W), bool or uint8 tensor.
@@ -145,15 +119,13 @@ def pixel_error(pred_bin: torch.Tensor, target_bin: torch.Tensor) -> torch.Tenso
         A tensor of pixel error rates for each item in the batch.
     """
     assert pred_bin.shape == target_bin.shape
+
+    # Используем smp_metrics.accuracy, который также работает с батчами
+    target_long = target_bin.long()
+    tp, fp, fn, tn = smp_metrics.get_stats(
+        pred_bin.float(), target_long, mode='binary', threshold=0.5
+    )
     
-    # DEV: Это простая метрика, но она может быть обманчивой при дисбалансе классов.
-    # Если 99% изображения - фон, модель, предсказывающая только фон, будет иметь
-    # 99% точности (1% ошибки), что звучит хорошо, но бесполезно.
+    accuracy = smp_metrics.accuracy(tp, fp, fn, tn, reduction=None)
     
-    # Number of pixels that do not match
-    incorrect_pixels = (pred_bin != target_bin).sum(dim=[1, 2, 3])
-    
-    # Total number of pixels
-    total_pixels = pred_bin.shape[1] * pred_bin.shape[2] * pred_bin.shape[3]
-    
-    return incorrect_pixels / total_pixels
+    return 1.0 - accuracy

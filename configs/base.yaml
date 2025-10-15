@@ -259,7 +259,7 @@ loss:
 # --- EVALUATION CONFIGURATION ---
 eval:
   batch_size: 16
-  metrics: ["dice", "iou", "bf1"]
+  metrics: ["dice", "iou", "bf1", "pixel_error"]
   
   visualization:
     enabled: true

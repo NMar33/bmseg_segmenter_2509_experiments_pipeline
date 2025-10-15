@@ -26,7 +26,7 @@ from segwork.utils import set_seed, load_config, flatten_config
 from segwork.data.dataset import TilesDataset, build_augmentations
 from segwork.models.model_builder import build_model
 
-from segwork.metrics.core import dice_score
+from segwork.metrics.core import dice_score, iou_score, boundary_f1_score, pixel_error
 
 from segwork.mlflow_loggers.training_loggers import (
     log_validation_visuals,
@@ -275,12 +275,20 @@ def main():
 
             model.train()
             train_loss = 0.0
+            train_dice_score_lv = 0.0
+            train_dice_scores = []
 
             for images, masks in tqdm(dl_train, desc=f"Epoch {epoch+1}/{cfg['train']['epochs']} [Train]"):
                 images, masks = images.to(device), masks.to(device)
                 with torch.amp.autocast(device_type=device_type, enabled=cfg['train']['amp']):
                     logits = model(images)
-                    loss = loss_weights['dice'] * dice_loss(logits, masks) + loss_weights['bce'] * bce_loss(logits, masks)
+                    dice_loss_value = dice_loss(logits, masks)
+                    loss = loss_weights['dice'] * dice_loss_value + loss_weights['bce'] * bce_loss(logits, masks)
+                
+                with torch.no_grad():
+                    probs = torch.sigmoid(logits)
+                    batch_dice = dice_score(probs, masks) # Вызываем нашу новую обертку
+                    train_dice_scores.extend(batch_dice.cpu().numpy()) # Собираем результаты
                 optimizer.zero_grad()
                 scaler.scale(loss).backward()
 
@@ -295,29 +303,79 @@ def main():
                 scaler.step(optimizer)
                 scaler.update()
                 train_loss += loss.item()
+                train_dice_score_lv += 1 - dice_loss_value.item()
                 global_step += 1
             
             scheduler.step()
             avg_train_loss = train_loss / len(dl_train)
+            avg_train_dice_score = np.mean(train_dice_scores) if train_dice_scores else 0.0
+            avg_train_dice_score_lv = train_dice_score_lv / len(dl_train)
+
 
             avg_val_dice = 0.0
             if dl_val:
                 model.eval()
-                val_dices = []
+                # --- ИЗМЕНЕНИЕ 1: Создаем списки для всех метрик ---
+                val_metrics = {
+                    'dice': [],
+                    'iou': [],
+                    'bf1': [],
+                    'pixel_error': []
+                }
+                val_loss = 0.0
                 with torch.no_grad():
                     for images, masks in tqdm(dl_val, desc=f"Epoch {epoch+1}/{cfg['train']['epochs']} [Val]"):
                         images, masks = images.to(device), masks.to(device)
                         with torch.amp.autocast(device_type=device_type, enabled=cfg['train']['amp']):
                             logits = model(images)
                         probs = torch.sigmoid(logits)
-                        batch_dice = dice_score(probs, masks).cpu().numpy()
-                        val_dices.extend(batch_dice)
-                avg_val_dice = np.mean(val_dices) if val_dices else 0.0
+                        
+                        # --- ИЗМЕНЕНИЕ 2: Считаем все метрики ---
+                        # Метрики SMP (Dice, IoU)
+                        val_metrics['dice'].extend(dice_score(probs, masks).cpu().numpy())
+                        val_metrics['iou'].extend(iou_score(probs, masks).cpu().numpy())
+                        
+                        # Метрика MONAI (BF1)
+                        # Она принимает бинарные тензоры и возвращает одно число на батч
+                        pred_bin = (probs > 0.5)
+                        bf1 = boundary_f1_score(pred_bin, masks.bool(), boundary_eps=3) # boundary_eps можно вынести в конфиг
+                        val_metrics['bf1'].append(bf1)
+                        
+                        val_metrics['pixel_error'].extend(pixel_error(pred_bin, masks.bool()).cpu().numpy())
+                        
+                        # Расчет лосса остается без изменений
+                        batch_val_loss = loss_weights['dice'] * dice_loss(logits, masks) + loss_weights['bce'] * bce_loss(logits, masks)
+                        val_loss += batch_val_loss.item()
+                
+                avg_val_loss = val_loss / len(dl_val)
+                # --- ИЗМЕНЕНИЕ 3: Агрегируем все метрики ---
+                avg_val_metrics = {key: np.mean(values) if values else 0.0 for key, values in val_metrics.items()}
+                avg_val_dice = avg_val_metrics['dice']
+
+            # avg_val_dice = 0.0
+            # if dl_val:
+            #     model.eval()
+            #     val_dices = []
+            #     val_loss = 0.0
+            #     with torch.no_grad():
+            #         for images, masks in tqdm(dl_val, desc=f"Epoch {epoch+1}/{cfg['train']['epochs']} [Val]"):
+            #             images, masks = images.to(device), masks.to(device)
+            #             with torch.amp.autocast(device_type=device_type, enabled=cfg['train']['amp']):
+            #                 logits = model(images)
+            #             probs = torch.sigmoid(logits)
+            #             batch_dice = dice_score(probs, masks).cpu().numpy()
+            #             val_dices.extend(batch_dice)
+            #             batch_val_loss = loss_weights['dice'] * dice_loss(logits, masks) + loss_weights['bce'] * bce_loss(logits, masks)
+            #             val_loss += batch_val_loss.item()
+            #     avg_val_loss = val_loss / len(dl_val)
+            #     avg_val_dice = np.mean(val_dices) if val_dices else 0.0
             
             print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}, Val Dice = {avg_val_dice:.4f}")
             log = {
                     "train/loss": avg_train_loss,
-                    "val/dice": avg_val_dice,
+                    "train/dice": avg_train_dice_score,
+                    "train/dice_lv": avg_train_dice_score_lv,
+                    **{f"val/{key}": value for key, value in avg_val_metrics.items()},
                     "lr/decoder_adapter": optimizer.param_groups[0]['lr'] # Основной lr
                 }
             if len(optimizer.param_groups) > 1:

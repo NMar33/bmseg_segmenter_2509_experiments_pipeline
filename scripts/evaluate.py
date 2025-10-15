@@ -29,8 +29,9 @@ from segwork.utils import load_config
 from segwork.models.model_builder import build_model
 from segwork.data.filters import build_feature_stack, norm_zscore
 from segwork.data.stitching import stitch_tiles
-from segwork.metrics.core import dice_score, iou_score, boundary_f1_score
-from segwork.metrics.advanced import v_rand_score, warping_error_score
+
+from segwork.metrics.core import dice_score, iou_score, boundary_f1_score, pixel_error
+# from segwork.metrics.advanced import v_rand_score, warping_error_score
 from segwork.visualization.explorers import generate_evaluation_visuals
 from segwork.data.dataset import binarize_mask
 
@@ -143,20 +144,47 @@ def main():
             # Save prediction to temporary directory
             tiff.imwrite(temp_preds_dir / f"{source_id}_pred.tif", stitched_prob_mask)
 
+
             # Calculate individual metrics
-            gt_tensor = torch.from_numpy(full_mask_gt).unsqueeze(0).unsqueeze(0)
-            prob_tensor = torch.from_numpy(stitched_prob_mask).unsqueeze(0).unsqueeze(0)
+            # --- ИЗМЕНЕНИЕ 1: Перемещаем тензоры на нужный device для расчета ---
+            gt_tensor = torch.from_numpy(full_mask_gt).unsqueeze(0).unsqueeze(0).to(device)
+            prob_tensor = torch.from_numpy(stitched_prob_mask).unsqueeze(0).unsqueeze(0).to(device)
             pred_bin_tensor = (prob_tensor > 0.5)
             
             image_metrics = {'image_id': source_id}
+            # --- ИЗМЕНЕНИЕ 2: Используем новые библиотечные метрики ---
+            # `dice_score` и `iou_score` теперь возвращают тензор с одним элементом
             if "dice" in cfg['eval']['metrics']:
                 image_metrics['dice'] = dice_score(prob_tensor, gt_tensor).item()
             if "iou" in cfg['eval']['metrics']:
                 image_metrics['iou'] = iou_score(prob_tensor, gt_tensor).item()
+            
+            # `boundary_f1_score` теперь возвращает float, убираем np.mean()
             if "bf1" in cfg['eval']['metrics']:
-                image_metrics['bf1'] = np.mean(boundary_f1_score(pred_bin_tensor, gt_tensor.bool()))
+                image_metrics['bf1'] = boundary_f1_score(pred_bin_tensor, gt_tensor.bool())
+            
+            # --- ИЗМЕНЕНИЕ 3: Добавляем pixel_error ---
+            # Добавим новую метрику, если она указана в конфиге
+            if "pixel_error" in cfg['eval']['metrics']:
+                 image_metrics['pixel_error'] = pixel_error(pred_bin_tensor, gt_tensor.bool()).item()
             
             all_image_results.append(image_metrics)
+
+
+            # # Calculate individual metrics
+            # gt_tensor = torch.from_numpy(full_mask_gt).unsqueeze(0).unsqueeze(0)
+            # prob_tensor = torch.from_numpy(stitched_prob_mask).unsqueeze(0).unsqueeze(0)
+            # pred_bin_tensor = (prob_tensor > 0.5)
+            
+            # image_metrics = {'image_id': source_id}
+            # if "dice" in cfg['eval']['metrics']:
+            #     image_metrics['dice'] = dice_score(prob_tensor, gt_tensor).item()
+            # if "iou" in cfg['eval']['metrics']:
+            #     image_metrics['iou'] = iou_score(prob_tensor, gt_tensor).item()
+            # if "bf1" in cfg['eval']['metrics']:
+            #     image_metrics['bf1'] = np.mean(boundary_f1_score(pred_bin_tensor, gt_tensor.bool()))
+            
+            # all_image_results.append(image_metrics)
 
         # --- 4. Second Pass: Analysis, Visualization, and Logging ---
         df_results = pd.DataFrame(all_image_results)
