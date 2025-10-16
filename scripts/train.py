@@ -196,14 +196,16 @@ def main():
             train_tile_ids,
             is_train=True, 
             augmentations=train_augs,
-            mask_processing_cfg=cfg['data'].get('mask_processing')
+            mask_processing_cfg=cfg['data'].get('mask_processing'),
+            feature_bank_cfg=cfg['data'].get('feature_bank')
         )
     ds_val = TilesDataset(
         tiles_root, 
         val_tile_ids,
         is_train=False, 
         augmentations=None, 
-        mask_processing_cfg=cfg['data'].get('mask_processing')
+        mask_processing_cfg=cfg['data'].get('mask_processing'),
+        feature_bank_cfg=cfg['data'].get('feature_bank')
     ) if val_tile_ids else None
 
     dl_train = DataLoader(ds_train, batch_size=cfg['train']['batch_size'], shuffle=True, num_workers=cfg['train']['num_workers'], pin_memory=(device_type == 'cuda'))
