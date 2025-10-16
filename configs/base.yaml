@@ -117,14 +117,25 @@ model:
   encoder: "timm-efficientnet-b3"
   encoder_weights: "imagenet" # `null` for training from scratch
   classes: 1
-  
+
   adapter:
     use: true
     out_channels: 3
-    init: "xavier"
-    # DEV: Freezing the encoder for a few epochs allows the adapter to learn a
-    # reasonable initial projection before the entire network is fine-tuned.
-    # freeze_encoder_epochs: 1 переместил
+    init: "xavier" # Initialization method for the Conv2d weights.
+
+    # --- NEW: Soft Initialization Weights ---
+    # This section allows applying a multiplier to the initial weights of
+    # specific input channels of the adapter, right after initialization.
+    # It helps to prioritize certain channels (like 'raw') at the start of training.
+    initial_channel_weights:
+      # `default` is the multiplier applied to any channel NOT explicitly listed below.
+      # A small value "dampens" the initial impact of feature channels.
+      default: 0.01
+      
+      # Set the multiplier for the 'raw' channel to 1.0 to keep its
+      # original initialized weights, effectively giving it priority.
+      raw: 1.0
+
 
 # --- TRAINING CONFIGURATION ---
 train:

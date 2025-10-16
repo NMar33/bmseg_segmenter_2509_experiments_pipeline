@@ -340,7 +340,7 @@ def main():
                         pred_bin = (probs > 0.5)
                         bf1 = boundary_f1_score(pred_bin, masks.bool(), boundary_eps=3) # boundary_eps можно вынести в конфиг
                         val_metrics['bf1'].append(bf1)
-                        
+
                         val_metrics['pixel_error'].extend(pixel_error(pred_bin, masks.bool()).cpu().numpy())
                         
                         # Расчет лосса остается без изменений
@@ -350,6 +350,7 @@ def main():
                 avg_val_loss = val_loss / len(dl_val)
                 # --- ИЗМЕНЕНИЕ 3: Агрегируем все метрики ---
                 avg_val_metrics = {key: np.mean(values) if values else 0.0 for key, values in val_metrics.items()}
+                avg_val_metrics["loss"] = avg_val_loss
                 avg_val_dice = avg_val_metrics['dice']
 
             # avg_val_dice = 0.0

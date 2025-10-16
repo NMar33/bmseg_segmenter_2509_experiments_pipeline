@@ -39,14 +39,25 @@ def build_model(config: Dict[str, Any]) -> nn.Module:
         # DEV: Это наша ключевая архитектура для M2 и M3.
         # Адаптер преобразует наши N каналов в 3, а затем они подаются
         # в стандартный U-Net с предобученным энкодером.
-        adapter_out_channels = model_cfg['adapter']['out_channels']
+        # adapter_out_channels = model_cfg['adapter']['out_channels']
+        adapter_cfg = model_cfg['adapter']
+        adapter_out_channels = adapter_cfg['out_channels']
         
+        # adapter = ChannelAdapter(
+        #     c_in=in_channels,
+        #     c_out=adapter_out_channels,
+        #     init=model_cfg['adapter']['init']
+        # )
+
         adapter = ChannelAdapter(
             c_in=in_channels,
             c_out=adapter_out_channels,
-            init=model_cfg['adapter']['init']
+            init=adapter_cfg['init'],
+            # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Передаем новые параметры ---
+            channel_names=data_cfg['feature_bank']['channels'] if use_feature_bank else ['raw'],
+            initial_channel_weights=adapter_cfg.get('initial_channel_weights')
         )
-        
+
         net = Unet(
             encoder_name=model_cfg['encoder'],
             encoder_weights=model_cfg['encoder_weights'],

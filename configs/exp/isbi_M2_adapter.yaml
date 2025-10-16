@@ -34,6 +34,8 @@ data:
   # `preprocess-tiles` will generate single-channel z-scored tiles.
   feature_bank:
     use: false
+    channels:
+      - raw          # Normalized raw image
 
 # --- MODEL ---
 # model:
