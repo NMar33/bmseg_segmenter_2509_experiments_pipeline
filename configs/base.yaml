@@ -108,7 +108,18 @@ data:
       - log_sigma1
       - log_sigma2
       - frangi
-  
+
+    # --- NEW: Channel Dropout Configuration ---
+    # This acts as a strong regularizer by randomly dropping out entire feature channels
+    # during training, forcing the model to not rely on specific combinations of features.
+    channel_dropout:
+      # Probability of dropping out a single channel. Set to 0.0 to disable.
+      p: 0.2 # Disabled by default
+      
+      # A list of channels that should NEVER be dropped out.
+      # It's highly recommended to always keep the 'raw' channel.
+      always_keep: ["raw"]
+
   save_float16: true
 
 # --- MODEL CONFIGURATION ---

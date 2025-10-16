@@ -10,6 +10,7 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 import albumentations as A
+import random
 
 def binarize_mask(mask: np.ndarray, config: Dict[str, Any] | None) -> np.ndarray:
     """
@@ -43,8 +44,10 @@ class TilesDataset(Dataset):
         self,
         tiles_root: Path,
         tile_ids: List[str],
+        is_train: bool, # <-- НОВЫЙ АРГУМЕНТ
         augmentations: Callable | None = None,
-        mask_processing_cfg: Dict[str, Any] | None = None
+        mask_processing_cfg: Dict[str, Any] | None = None,
+        feature_bank_cfg: Dict[str, Any] | None = None # <-- НОВЫЙ АРГУМЕНТ
     ):
         """
         Args:
@@ -52,11 +55,17 @@ class TilesDataset(Dataset):
             tile_ids: A list of tile IDs to include in this dataset instance.
             augmentations: An albumentations composition.
             mask_processing_cfg: Configuration for how to binarize masks.
+            is_train: Flag to indicate if this is a training dataset (to enable dropout).
+            feature_bank_cfg: The `data.feature_bank` section from the config.
         """
         self.root = tiles_root
         self.ids = tile_ids
         self.aug = augmentations
         self.mask_cfg = mask_processing_cfg or {}
+        
+        # --- ИЗМЕНЕНИЕ: Сохраняем конфиги для dropout ---
+        self.is_train = is_train
+        self.feature_bank_cfg = feature_bank_cfg or {}
         
         self.img_path = self.root / "images"
         self.mask_path = self.root / "masks"
@@ -87,6 +96,20 @@ class TilesDataset(Dataset):
             
             image_stack = np.transpose(augmented['image'], (2, 0, 1)) # HWC -> CHW
             mask = np.transpose(augmented['mask'], (2, 0, 1))
+        
+        # --- НОВЫЙ БЛОК: Channel Dropout ---
+        # DEV: Применяется ПОСЛЕ геометрических аугментаций, только для train сета.
+        dropout_cfg = self.feature_bank_cfg.get('channel_dropout', {})
+        if self.is_train and dropout_cfg.get('p', 0) > 0 and image_stack.shape[0] > 1:
+            
+            channel_names = self.feature_bank_cfg.get('channels', [])
+            always_keep = dropout_cfg.get('always_keep', [])
+            
+            for i, channel_name in enumerate(channel_names):
+                if channel_name not in always_keep:
+                    if random.random() < dropout_cfg['p']:
+                        # Обнуляем канал
+                        image_stack[i, :, :] = 0.0
 
         # Use .copy() to avoid a UserWarning from PyTorch about negative strides.
         return torch.from_numpy(image_stack.copy()), torch.from_numpy(mask.copy())
