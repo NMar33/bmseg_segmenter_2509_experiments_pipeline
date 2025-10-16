@@ -193,13 +193,15 @@ def main():
 
     ds_train = TilesDataset(
             tiles_root, 
-            train_tile_ids, 
+            train_tile_ids,
+            is_train=True, 
             augmentations=train_augs,
             mask_processing_cfg=cfg['data'].get('mask_processing')
         )
     ds_val = TilesDataset(
         tiles_root, 
-        val_tile_ids, 
+        val_tile_ids,
+        is_train=False, 
         augmentations=None, 
         mask_processing_cfg=cfg['data'].get('mask_processing')
     ) if val_tile_ids else None
