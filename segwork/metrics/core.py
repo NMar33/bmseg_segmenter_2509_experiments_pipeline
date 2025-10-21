@@ -11,6 +11,8 @@ to ensure reliability and comparability of results.
 import torch
 import numpy as np
 
+from typing import Dict
+
 # --- Библиотечные импорты ---
 import segmentation_models_pytorch.metrics as smp_metrics
 from monai.metrics import compute_surface_dice
@@ -129,3 +131,26 @@ def pixel_error(pred_bin: torch.Tensor, target_bin: torch.Tensor) -> torch.Tenso
     accuracy = smp_metrics.accuracy(tp, fp, fn, tn, reduction=None)
     
     return 1.0 - accuracy
+
+def main_metrics(pred: torch.Tensor, target: torch.Tensor) -> Dict[str, torch.Tensor]:
+
+    target_long = target.long()
+
+    tp, fp, fn, tn = smp_metrics.get_stats(
+        pred, target_long, mode='binary', threshold=0.5
+    )
+    
+    accuracy = smp_metrics.accuracy(tp, fp, fn, tn, reduction=None)
+    recall = smp_metrics.recall(tp, fp, fn, tn, reduction=None)
+    f1_score = smp_metrics.f1_score(tp, fp, fn, tn, reduction=None)
+    iou_score = smp_metrics.iou_score(tp, fp, fn, tn, reduction=None)
+
+    pixel_error = 1.0 - accuracy
+
+    metrics = {"acc": accuracy, "rec": recall, 
+               "dice": f1_score,
+               "iou": iou_score, "perr": pixel_error}
+
+
+    
+    return metrics

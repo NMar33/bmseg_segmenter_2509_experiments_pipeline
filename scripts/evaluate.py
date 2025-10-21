@@ -30,7 +30,7 @@ from segwork.models.model_builder import build_model
 from segwork.data.filters import build_feature_stack, norm_zscore
 from segwork.data.stitching import stitch_tiles
 
-from segwork.metrics.core import dice_score, iou_score, boundary_f1_score, pixel_error
+from segwork.metrics.core import dice_score, iou_score, boundary_f1_score, pixel_error, main_metrics
 # from segwork.metrics.advanced import v_rand_score, warping_error_score
 from segwork.visualization.explorers import generate_evaluation_visuals
 from segwork.data.dataset import binarize_mask
@@ -152,6 +152,17 @@ def main():
             pred_bin_tensor = (prob_tensor > 0.5)
             
             image_metrics = {'image_id': source_id}
+
+            image_metrics = {
+                'image_id': source_id, 
+                'acc': [],
+                'rec': [],
+                'dice': [],
+                'iou': [],
+                'perr': [],
+                'bf1': [],                    
+            }
+
             # --- ИЗМЕНЕНИЕ 2: Используем новые библиотечные метрики ---
             # `dice_score` и `iou_score` теперь возвращают тензор с одним элементом
             if "dice" in cfg['eval']['metrics']:
