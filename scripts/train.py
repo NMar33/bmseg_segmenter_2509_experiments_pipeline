@@ -251,7 +251,7 @@ def main():
     dice_loss = DiceLoss(mode='binary', from_logits=True)
     focal_loss = FocalLoss(mode='binary', gamma=2)
     # bce_loss = SoftBCEWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
-    loss_weights = {'dice': cfg['loss']['params']['dice_weight'], 'bce': cfg['loss']['params']['focal_weight']}
+    loss_weights = {'dice': cfg['loss']['params']['dice_weight'], 'focal': cfg['loss']['params']['focal_weight']}
 
     scaler = torch.amp.GradScaler(device_type, enabled=cfg['train']['amp'])
     
@@ -296,7 +296,7 @@ def main():
                 with torch.amp.autocast(device_type=device_type, enabled=cfg['train']['amp']):
                     logits = model(images)
                     dice_loss_value = dice_loss(logits, masks)
-                    loss = loss_weights['dice'] * dice_loss_value + loss_weights['bce'] * bce_loss(logits, masks)
+                    loss = loss_weights['dice'] * dice_loss_value + loss_weights['focal'] * focal_loss(logits, masks)
                 
                 with torch.no_grad():
                     probs = torch.sigmoid(logits)
@@ -373,7 +373,7 @@ def main():
                         # val_metrics['pixel_error'].extend(pixel_error(pred_bin, masks.bool()).cpu().numpy())
                         
                         # Расчет лосса остается без изменений
-                        batch_val_loss = loss_weights['dice'] * dice_loss(logits, masks) + loss_weights['bce'] * focal_loss(logits, masks)
+                        batch_val_loss = loss_weights['dice'] * dice_loss(logits, masks) + loss_weights['focal'] * focal_loss(logits, masks)
                         val_loss += batch_val_loss.item()
                 
                 avg_val_loss = val_loss / len(dl_val)
