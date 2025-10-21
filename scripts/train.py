@@ -15,7 +15,7 @@ from typing import List, Dict, Any
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from segmentation_models_pytorch.losses import DiceLoss, SoftBCEWithLogitsLoss
+from segmentation_models_pytorch.losses import DiceLoss, SoftBCEWithLogitsLoss, FocalLoss
 import mlflow
 from tqdm import tqdm
 
@@ -249,8 +249,9 @@ def main():
         set_encoder_grad(model, requires_grad=False)
     
     dice_loss = DiceLoss(mode='binary', from_logits=True)
-    bce_loss = SoftBCEWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
-    loss_weights = {'dice': cfg['loss']['params']['dice_weight'], 'bce': cfg['loss']['params']['bce_weight']}
+    focal_loss = FocalLoss(mode='binary', gamma=2)
+    # bce_loss = SoftBCEWithLogitsLoss(pos_weight=torch.tensor([cfg['loss']['params']['pos_weight']]).to(device))
+    loss_weights = {'dice': cfg['loss']['params']['dice_weight'], 'bce': cfg['loss']['params']['focal_weight']}
 
     scaler = torch.amp.GradScaler(device_type, enabled=cfg['train']['amp'])
     
@@ -284,6 +285,7 @@ def main():
             train_metrics = {
                     'acc': [],
                     'rec': [],
+                    'prc': [],
                     'dice': [],
                     'iou': [],
                     'perr': [],                   
@@ -338,6 +340,7 @@ def main():
                 val_metrics = {
                     'acc': [],
                     'rec': [],
+                    'prc': [],
                     'dice': [],
                     'iou': [],
                     'perr': [],
@@ -370,7 +373,7 @@ def main():
                         # val_metrics['pixel_error'].extend(pixel_error(pred_bin, masks.bool()).cpu().numpy())
                         
                         # Расчет лосса остается без изменений
-                        batch_val_loss = loss_weights['dice'] * dice_loss(logits, masks) + loss_weights['bce'] * bce_loss(logits, masks)
+                        batch_val_loss = loss_weights['dice'] * dice_loss(logits, masks) + loss_weights['bce'] * focal_loss(logits, masks)
                         val_loss += batch_val_loss.item()
                 
                 avg_val_loss = val_loss / len(dl_val)

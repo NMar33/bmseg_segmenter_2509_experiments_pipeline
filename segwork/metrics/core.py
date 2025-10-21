@@ -144,10 +144,11 @@ def main_metrics(pred: torch.Tensor, target: torch.Tensor) -> Dict[str, torch.Te
     recall = smp_metrics.recall(tp, fp, fn, tn, reduction=None)
     f1_score = smp_metrics.f1_score(tp, fp, fn, tn, reduction=None)
     iou_score = smp_metrics.iou_score(tp, fp, fn, tn, reduction=None)
+    precision = smp_metrics.precision(tp, fp, fn, tn, reduction=None)
 
     pixel_error = 1.0 - accuracy
 
-    metrics = {"acc": accuracy, "rec": recall, 
+    metrics = {"acc": accuracy, "rec": recall, "prc": precision,
                "dice": f1_score,
                "iou": iou_score, "perr": pixel_error}
 

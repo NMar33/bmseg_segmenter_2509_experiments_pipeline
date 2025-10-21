@@ -240,7 +240,8 @@ loss:
   name: "dice_bce"
   params:
     dice_weight: 0.5
-    bce_weight: 0.5
+    focal_weight: 0.5
+    # bce_weight: 0.5
     pos_weight: 1.0
 
 # # --- EVALUATION CONFIGURATION ---

@@ -151,33 +151,38 @@ def main():
             prob_tensor = torch.from_numpy(stitched_prob_mask).unsqueeze(0).unsqueeze(0).to(device)
             pred_bin_tensor = (prob_tensor > 0.5)
             
-            image_metrics = {'image_id': source_id}
+            # image_metrics = {'image_id': source_id}
 
             image_metrics = {
                 'image_id': source_id, 
-                'acc': [],
-                'rec': [],
-                'dice': [],
-                'iou': [],
-                'perr': [],
-                'bf1': [],                    
+                'acc': None,
+                'rec': None,
+                'prc': None,
+                'dice': None,
+                'iou': None,
+                'perr': None,             
             }
 
             # --- ИЗМЕНЕНИЕ 2: Используем новые библиотечные метрики ---
+            test_main_metrics = main_metrics(prob_tensor, gt_tensor)
+            for k, v in test_main_metrics.items():
+                if k in image_metrics:
+                    image_metrics[k] = v.item()
+            image_metrics['bf1'] = boundary_f1_score(pred_bin_tensor, gt_tensor.bool())
             # `dice_score` и `iou_score` теперь возвращают тензор с одним элементом
-            if "dice" in cfg['eval']['metrics']:
-                image_metrics['dice'] = dice_score(prob_tensor, gt_tensor).item()
-            if "iou" in cfg['eval']['metrics']:
-                image_metrics['iou'] = iou_score(prob_tensor, gt_tensor).item()
+            # if "dice" in cfg['eval']['metrics']:
+                # image_metrics['dice'] = dice_score(prob_tensor, gt_tensor).item()
+            # if "iou" in cfg['eval']['metrics']:
+            #     image_metrics['iou'] = iou_score(prob_tensor, gt_tensor).item()
             
-            # `boundary_f1_score` теперь возвращает float, убираем np.mean()
-            if "bf1" in cfg['eval']['metrics']:
-                image_metrics['bf1'] = boundary_f1_score(pred_bin_tensor, gt_tensor.bool())
+            # # `boundary_f1_score` теперь возвращает float, убираем np.mean()
+            # if "bf1" in cfg['eval']['metrics']:
+            #     image_metrics['bf1'] = boundary_f1_score(pred_bin_tensor, gt_tensor.bool())
             
-            # --- ИЗМЕНЕНИЕ 3: Добавляем pixel_error ---
-            # Добавим новую метрику, если она указана в конфиге
-            if "pixel_error" in cfg['eval']['metrics']:
-                 image_metrics['pixel_error'] = pixel_error(pred_bin_tensor, gt_tensor.bool()).item()
+            # # --- ИЗМЕНЕНИЕ 3: Добавляем pixel_error ---
+            # # Добавим новую метрику, если она указана в конфиге
+            # if "pixel_error" in cfg['eval']['metrics']:
+            #      image_metrics['pixel_error'] = pixel_error(pred_bin_tensor, gt_tensor.bool()).item()
             
             all_image_results.append(image_metrics)
 
