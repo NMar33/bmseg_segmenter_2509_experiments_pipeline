@@ -71,7 +71,7 @@ data:
     # - "ignore_zero": Any pixel value > 0 becomes 1. Correct for instance masks
     #                  where the background is 0, and each object has a unique
     #                  ID (1, 2, 3, ...). This treats all objects as a single class.
-    binarize_mode: "zero" #"nonzero" # Set a safe and common default.
+    binarize_mode: "zero" #"nonzero" 
   
   # --- AUGMENTATION CONFIGURATION ---
   # This section controls the augmentations applied during training.
@@ -89,6 +89,9 @@ data:
     VerticalFlip: { p: 0.5 }
     RandomRotate90: { p: 0.5 }
     ShiftScaleRotate: { p: 0.5, shift_limit: 0.0625, scale_limit: 0.1, rotate_limit: 15 }
+
+    ElasticTransform: { p: 0.5, alpha: 120, sigma: 6.0, alpha_affine: 10.0, border_mode: 0 }
+
     GaussianBlur: { p: 0.0, blur_limit: [3, 7] } # Disabled by default
 
     # Photometric augmentations (use only with single-channel data)
@@ -190,50 +193,15 @@ train:
   validation_visualization:
     enabled: true        # Master switch to log validation previews to MLflow.
     num_samples: 4       # How many fixed validation samples to show per epoch.
-    # DEV: Мы можем переиспользовать стили из секции `eval.visualization`,
-    # но лучше определить их здесь явно для независимости модулей.
+
     style:
       figsize_per_panel: [5, 5]
-      dpi: 100 # Меньше DPI для более "легких" артефактов
+      dpi: 100 
       title_fontsize: 10
       suptitle_fontsize: 14
-      # Используем те же цвета, что и в `eval`
       gt_color_rgb: [0, 170, 0]
       pred_color_rgb: [227, 27, 27]
       overlay_alpha: 0.4
-
-# # --- TRAINING CONFIGURATION ---
-# train:
-#   epochs: 3
-#   batch_size: 8
-#   num_workers: 2
-#   amp: true
-  
-#   # --- НОВЫЙ БЛОК ЗДЕСЬ ---
-#   # Configures visualization of validation samples during training.
-#   validation_visualization:
-#     enabled: true        # Master switch to log validation previews to MLflow.
-#     num_samples: 4       # How many fixed validation samples to show per epoch.
-#     # DEV: Мы можем переиспользовать стили из секции `eval.visualization`,
-#     # но лучше определить их здесь явно для независимости модулей.
-#     style:
-#       figsize_per_panel: [5, 5]
-#       dpi: 100 # Меньше DPI для более "легких" артефактов
-#       title_fontsize: 10
-#       suptitle_fontsize: 14
-#       # Используем те же цвета, что и в `eval`
-#       gt_color_rgb: [0, 170, 0]
-#       pred_color_rgb: [227, 27, 27]
-#       overlay_alpha: 0.4
-  
-#   optimizer:
-#     name: "adamw"
-#     lr: 3.0e-4
-#     weight_decay: 1.0e-4
-  
-#   scheduler:
-#     name: "cosine"
-#     params: {}
 
 # --- LOSS FUNCTION CONFIGURATION ---
 loss:
@@ -244,40 +212,6 @@ loss:
     # bce_weight: 0.5
     pos_weight: 1.0
 
-# # --- EVALUATION CONFIGURATION ---
-# eval:
-#   batch_size: 16
-#   metrics: ["dice", "iou", "bf1"]
-  
-#   # --- NEW: ADVANCED VISUALIZATION SECTION ---
-#   visualization:
-#     enabled: true  # Master switch to enable/disable all visualization generation.
-    
-#     # --- Selection Strategy ---
-#     # Selects which images from the test set to visualize.
-#     primary_metric: "dice" # Metric used to sort for 'best' and 'worst'.
-#     num_best: 1            # Number of samples with the highest metric score to visualize.
-#     num_worst: 1           # Number of samples with the lowest metric score to visualize.
-#     num_random: 1          # Number of random samples for an unbiased view.
-
-#     # --- Feature Bank Visualization ---
-#     # If true, for each selected image, an additional plot showing all
-#     # input filter channels will be generated. This is only active if
-#     # the model was trained with `feature_bank.use: true`.
-#     visualize_feature_bank: true
-
-#     # --- Styling for Visualization Plots ---
-#     style:
-#       figsize_per_panel: [6, 6] # (width, height) for each panel in the grid
-#       dpi: 150
-#       title_fontsize: 12
-#       # Colormap for filter visualizations (if visualize_feature_bank is true)
-#       colormap: "viridis" 
-#       # Overlay settings for the main comparison plot
-#       overlay_alpha: 0.4
-#       # Colors are in RGB format
-#       gt_color_rgb: [0, 255, 0]      # Green for Ground Truth
-#       pred_color_rgb: [227, 27, 27] # Red for Prediction
 
 # --- EVALUATION CONFIGURATION ---
 eval:
